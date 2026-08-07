@@ -1,0 +1,78 @@
+mode systems
+
+import "harness.tw" as t
+import "../src/suite.tw" as suite
+import "../src/baseline.tw" as base
+import "../src/harness.tw" as bench
+import "../src/stats.tw" as stats
+import "../src/memory.tw" as mem
+import "../src/clock.tw" as clk
+
+fn nothing(i: I64) -> F64 = f64(i)
+
+fn result_of(name: Str, samples: Arr[I64]) -> bench.Result {
+  let s = stats.summarize(samples)
+  bench.Result {
+    name: name, samples: samples, timing: s, iters: s.n, inner: 1, warmup: 3,
+    memory: mem.unavailable(),
+    clock: clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 },
+    warning: "",
+  }
+}
+
+fn a_suite_keeps_its_registration_order() {
+  let s = suite.suite("tensor")
+  suite.add(s, "matmul", nothing)
+  suite.add(s, "conv", nothing)
+  suite.add(s, "argsort", nothing)
+  t.equal_str("first registered runs first", s.cases[0].name, "matmul")
+  t.equal_str("and last runs last", s.cases[2].name, "argsort")
+}
+
+fn two_benchmarks_with_one_name_are_refused() {
+  let s = suite.suite("tensor")
+  suite.add(s, "matmul", nothing)
+  suite.add(s, "matmul", nothing)
+  t.check("a duplicate name is refused", len(suite.validate(s)) > 0)
+}
+
+fn distinct_names_are_accepted() {
+  let s = suite.suite("tensor")
+  suite.add(s, "matmul", nothing)
+  suite.add(s, "conv", nothing)
+  t.equal_str("distinct names pass", suite.validate(s), "")
+}
+
+fn per_case_options_survive_registration() {
+  let s = suite.suite("tensor")
+  suite.add_with(s, "slow", bench.quick(), nothing)
+  suite.add(s, "normal", nothing)
+  t.equal_i64("the quick case kept its sample floor",
+    s.cases[0].opts.min_samples, bench.quick().min_samples)
+  t.equal_i64("the other case got the defaults",
+    s.cases[1].opts.min_samples, bench.defaults().min_samples)
+}
+
+# The failure this guards against: running a filtered subset and writing the
+# result out as the whole baseline, which deletes the history of everything
+# that was filtered out.
+fn recording_a_subset_leaves_the_rest_of_the_baseline_alone() {
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of("matmul", [100, 100, 100]), "old"))
+  base.put(b, base.entry_of(result_of("conv", [200, 200, 200]), "old"))
+  let ran: Arr[bench.Result] = [result_of("matmul", [150, 150, 150])]
+  suite.record(b, ran, "new")
+  # Entries are sorted by name, so conv comes first whatever order they ran in.
+  t.equal_i64("both entries survive", len(b.entries), 2)
+  t.equal_str("the one that did not run keeps its note", b.entries[0].note, "old")
+  t.near("and keeps its measurement", b.entries[0].median_ns, 200.0, 0.001)
+  t.equal_str("the one that ran was updated", b.entries[1].note, "new")
+  t.near("with the new measurement", b.entries[1].median_ns, 150.0, 0.001)
+}
+
+a_suite_keeps_its_registration_order()
+two_benchmarks_with_one_name_are_refused()
+distinct_names_are_accepted()
+per_case_options_survive_registration()
+recording_a_subset_leaves_the_rest_of_the_baseline_alone()
+t.report("suite")

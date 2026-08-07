@@ -1,0 +1,136 @@
+mode systems
+
+# suite.tw: running a set of benchmarks and turning them into a verdict.
+#
+# A suite is registered up front and run in registration order, not sorted.
+# Ordering by name would put the slow benchmarks wherever the alphabet put
+# them, and someone watching a run wants the cheap ones to report first. The
+# baseline file is sorted; the run is not, and those are different concerns.
+#
+# Nothing here decides an exit code. `gate` returns whether the suite regressed
+# and the caller decides what to do about it, because a pre-merge gate and a
+# nightly tracker want different answers to the same comparison.
+
+import "harness.tw" as bench
+import "baseline.tw" as base
+import "report.tw" as rep
+
+struct Case {
+  name: Str,
+  opts: bench.Options,
+  body: fn(I64) -> F64,
+}
+
+struct Suite {
+  name: Str,
+  cases: Arr[Case],
+}
+
+fn suite(name: Str) -> Suite {
+  let c: Arr[Case] = []
+  Suite { name: name, cases: c }
+}
+
+fn add(s: Suite, name: Str, body: fn(I64) -> F64) {
+  push(s.cases, Case { name: name, opts: bench.defaults(), body: body })
+}
+
+fn add_with(s: Suite, name: Str, opts: bench.Options, body: fn(I64) -> F64) {
+  push(s.cases, Case { name: name, opts: opts, body: body })
+}
+
+# Duplicate names are refused. Two benchmarks with one name means one of them
+# silently overwrites the other's baseline entry, and the history of a
+# benchmark quietly becomes the history of two different things.
+fn validate(s: Suite) -> Str {
+  let i = 0
+  while i < len(s.cases) {
+    let j = i + 1
+    while j < len(s.cases) {
+      if s.cases[i].name == s.cases[j].name {
+        return "two benchmarks are named " + s.cases[i].name
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  ""
+}
+
+fn run_all(s: Suite) -> Arr[bench.Result] {
+  let out: Arr[bench.Result] = []
+  let i = 0
+  while i < len(s.cases) {
+    let c = s.cases[i]
+    push(out, bench.run(c.name, c.opts, c.body))
+    i = i + 1
+  }
+  out
+}
+
+fn compare_all(results: Arr[bench.Result], b: base.Baseline,
+               th: base.Thresholds) -> Arr[base.Comparison] {
+  let out: Arr[base.Comparison] = []
+  let i = 0
+  while i < len(results) {
+    push(out, base.compare(results[i], b, th))
+    i = i + 1
+  }
+  out
+}
+
+# Fold a set of results into a new baseline, keeping entries for benchmarks
+# that were not run. Overwriting the whole file with only what ran is how a
+# baseline loses every benchmark someone filtered out that day.
+fn record(b: base.Baseline, results: Arr[bench.Result], note: Str) -> base.Baseline {
+  let i = 0
+  while i < len(results) {
+    base.put(b, base.entry_of(results[i], note))
+    i = i + 1
+  }
+  b
+}
+
+fn print_human(s: Suite, results: Arr[bench.Result]) {
+  print(s.name)
+  print(rep.human_header())
+  let i = 0
+  while i < len(results) {
+    let r = results[i]
+    print(rep.human_row(r))
+    let notes = rep.human_notes(r)
+    let j = 0
+    while j < len(notes) {
+      print(notes[j])
+      j = j + 1
+    }
+    print(rep.human_footer(r))
+    i = i + 1
+  }
+}
+
+fn print_json(results: Arr[bench.Result]) {
+  let i = 0
+  while i < len(results) {
+    print(rep.json_row(results[i]))
+    i = i + 1
+  }
+}
+
+fn print_comparisons(cs: Arr[base.Comparison], b: base.Baseline,
+                     results: Arr[bench.Result]) {
+  let i = 0
+  while i < len(cs) {
+    print(rep.human_comparison(cs[i]))
+    i = i + 1
+  }
+  let gone = base.missing(b, results)
+  let j = 0
+  while j < len(gone) {
+    print("-- " + gone[j] + " is in the baseline and was not run; a rename loses its history")
+    j = j + 1
+  }
+  print(rep.summary_line(cs))
+}
+
+fn gate(cs: Arr[base.Comparison]) -> Bool = base.any_regression(cs)

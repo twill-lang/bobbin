@@ -1,0 +1,98 @@
+mode systems
+
+# The measurement protocol, tested without a clock. Anything here that needed a
+# real timing would be a test whose result depended on what else the machine was
+# doing, which is the one thing a benchmarking tool's tests must not be.
+
+import "harness.tw" as t
+import "../src/harness.tw" as bench
+import "../src/stats.tw" as stats
+import "../src/clock.tw" as clk
+
+struct Calls {
+  n: I64,
+}
+
+let SEEN = Calls { n: 0 }
+
+fn counting_body(i: I64) -> F64 {
+  SEEN.n = SEEN.n + 1
+  f64(i)
+}
+
+fn warmup_runs_are_executed() {
+  SEEN.n = 0
+  bench.batch(7, counting_body)
+  t.equal_i64("a batch runs inner times", SEEN.n, 7)
+}
+
+fn a_batch_of_zero_runs_nothing() {
+  SEEN.n = 0
+  bench.batch(0, counting_body)
+  t.equal_i64("no iterations", SEEN.n, 0)
+}
+
+fn the_defaults_warm_up_and_ask_for_a_second_of_evidence() {
+  let o = bench.defaults()
+  t.check("warmup is not zero", o.warmup > 0)
+  t.check("at least twenty samples", o.min_samples >= 20)
+  t.equal_i64("a second of evidence", o.min_total_ns, 1000000000)
+  t.check("and a ceiling so a slow benchmark terminates", o.max_total_ns > o.min_total_ns)
+  t.check("memory is off by default", not o.measure_memory)
+}
+
+fn the_quick_options_are_quicker_and_still_warm_up() {
+  let q = bench.quick()
+  let d = bench.defaults()
+  t.check("quick asks for fewer samples", q.min_samples < d.min_samples)
+  t.check("quick asks for less time", q.min_total_ns < d.min_total_ns)
+  t.check("quick still warms up", q.warmup > 0)
+}
+
+fn a_median_at_the_clocks_granularity_is_not_reportable() {
+  let coarse = clk.ClockInfo { overhead_ns: 20, granularity_ns: 100 }
+  let s = stats.summarize([100, 120, 110, 130, 105, 115])
+  t.check("a median near the granularity warns", len(bench.diagnose(s, coarse)) > 0)
+}
+
+fn a_median_well_above_the_granularity_is_reportable() {
+  let fine = clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 }
+  let s = stats.summarize([10000, 10050, 9980, 10020, 10010, 9990])
+  t.equal_str("a clean measurement has nothing to warn about",
+    bench.diagnose(s, fine), "")
+}
+
+fn a_wide_interquartile_range_warns_regardless_of_the_clock() {
+  let fine = clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 }
+  let s = stats.summarize([5000, 15000, 6000, 14000, 7000, 13000])
+  t.check("a noisy sample warns", len(bench.diagnose(s, fine)) > 0)
+}
+
+fn no_samples_at_all_is_a_warning_and_not_a_zero() {
+  let fine = clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 }
+  t.check("an empty run warns", len(bench.diagnose(stats.summarize([]), fine)) > 0)
+}
+
+fn a_backwards_clock_produces_an_invalid_duration_rather_than_a_fast_one() {
+  t.equal_i64("end before start", clk.elapsed_ns(500, 400), -1)
+  t.equal_i64("a normal interval", clk.elapsed_ns(400, 500), 100)
+  t.equal_i64("a zero interval", clk.elapsed_ns(400, 400), 0)
+}
+
+fn keep_returns_what_it_was_given() {
+  # It has to be observably identity, or a benchmark body that returns a
+  # computed value could have that value changed by the harness.
+  t.near("keep is identity", bench.keep(3.5), 3.5, 0.0)
+}
+
+warmup_runs_are_executed()
+a_batch_of_zero_runs_nothing()
+the_defaults_warm_up_and_ask_for_a_second_of_evidence()
+the_quick_options_are_quicker_and_still_warm_up()
+a_median_at_the_clocks_granularity_is_not_reportable()
+a_median_well_above_the_granularity_is_reportable()
+a_wide_interquartile_range_warns_regardless_of_the_clock()
+no_samples_at_all_is_a_warning_and_not_a_zero()
+a_backwards_clock_produces_an_invalid_duration_rather_than_a_fast_one()
+keep_returns_what_it_was_given()
+t.report("harness")

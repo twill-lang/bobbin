@@ -1,0 +1,115 @@
+mode systems
+
+# memory.tw: allocation counters, and what has to exist before they work.
+#
+# twill exposes nothing about memory: no allocation count, no bytes allocated,
+# no live heap size, no way to ask the tensor engine how many tensors it made.
+# So this file is an interface and a specification of what the runtime has to
+# provide, and `docs/needs.md` entry 2 is the request. Nothing here can produce
+# a number today.
+#
+# What bobbin needs, and why each one rather than "memory usage":
+#
+#   allocs()      count of allocations since process start, monotonic. This is
+#                 the number that catches a regression. Bytes move with input
+#                 size and with the allocator's rounding; a count moves when
+#                 the code allocates in a new place, which is the thing that
+#                 got changed.
+#   bytes()       total bytes allocated since process start, monotonic. Catches
+#                 the other regression: same number of allocations, each one
+#                 larger, which is what a wrong intermediate shape looks like.
+#   live_bytes()  currently reachable. The only one of the three that can go
+#                 down, and the only one that answers "does this fit".
+#   tensors()     tensors constructed. twill-specific and the most useful of
+#                 the four here, because in tensor code one avoidable temporary
+#                 per element is the difference between a benchmark that fits
+#                 in cache and one that does not.
+#
+# All four must be cheap and must not themselves allocate, or the counter
+# measures the counter.
+#
+# The measurement must also be taken with the same discipline as the timing:
+# read before, read after, subtract, and never read a global "current usage",
+# because between the two reads the runtime may have collected.
+
+struct MemSample {
+  allocs: I64,
+  bytes: I64,
+  live_bytes: I64,
+  tensors: I64,
+  # False when the runtime does not provide counters, which is the case today.
+  # Every consumer checks it, and the reporters omit the memory columns
+  # entirely rather than printing zeros. A zero in a benchmark table is a
+  # measurement, and "we could not measure" is not zero.
+  available: Bool,
+}
+
+fn unavailable() -> MemSample {
+  MemSample { allocs: 0, bytes: 0, live_bytes: 0, tensors: 0, available: false }
+}
+
+fn read() -> MemSample {
+  if not mem_counters_available() {
+    return unavailable()
+  }
+  MemSample {
+    allocs: mem_allocs(),
+    bytes: mem_bytes(),
+    live_bytes: mem_live_bytes(),
+    tensors: mem_tensors(),
+    available: true,
+  }
+}
+
+# The difference between two samples. `live_bytes` is the only field that can be
+# negative, and that is not an error: it means the run freed more than it kept.
+fn delta(before: MemSample, after: MemSample) -> MemSample {
+  if not before.available or not after.available {
+    return unavailable()
+  }
+  MemSample {
+    allocs: after.allocs - before.allocs,
+    bytes: after.bytes - before.bytes,
+    live_bytes: after.live_bytes - before.live_bytes,
+    tensors: after.tensors - before.tensors,
+    available: true,
+  }
+}
+
+# Per-iteration figures. A benchmark reports allocations per operation, not per
+# batch of 500 iterations, because the per-operation number is the one that can
+# be compared against a different iteration count.
+fn per_iter(d: MemSample, iters: I64) -> MemSample {
+  if not d.available or iters <= 0 {
+    return unavailable()
+  }
+  MemSample {
+    allocs: d.allocs / iters,
+    bytes: d.bytes / iters,
+    live_bytes: d.live_bytes / iters,
+    tensors: d.tensors / iters,
+    available: true,
+  }
+}
+
+fn format_bytes(n: I64) -> Str {
+  let neg = n < 0
+  let v = n
+  if neg {
+    v = -v
+  }
+  let out = ""
+  if v < 1024 {
+    out = str(v) + "B"
+  } else if v < 1048576 {
+    out = str(v / 1024) + "KiB"
+  } else if v < 1073741824 {
+    out = str(v / 1048576) + "MiB"
+  } else {
+    out = str(v / 1073741824) + "GiB"
+  }
+  if neg {
+    return "-" + out
+  }
+  out
+}

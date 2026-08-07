@@ -1,0 +1,220 @@
+# What bobbin needs from twill
+
+bobbin is written in twill and does not run yet. This file is the reason: the
+language and runtime features the source uses that twill does not provide today,
+with the file and function that needs each one, and what bobbin does in the
+meantime.
+
+It is a work queue for the language, not a complaint. Every entry was reached by
+writing real code and hitting the wall, which is the only way a list like this is
+worth anything.
+
+Two of these are unusual for this list, because they are not about expressing a
+program. A benchmarking tool needs the runtime to tell it things about itself,
+and a language that cannot report its own allocation count cannot be profiled
+from inside. Entries 1 and 2 are that.
+
+The baseline is milestone 1 of `docs/self-hosting.md` in the twill repository:
+`mode systems`, `I64`, `Str`, `Arr[T]`, `Dict[Str, V]`, `struct`, and
+`read_file`.
+
+## Blocking: bobbin cannot measure anything without these
+
+### 1. A monotonic nanosecond clock
+
+**Needs:** `mono_ns() -> I64`
+**Used by:** `src/clock.tw` (`now_ns`, `probe`), and therefore every timing in
+the repository
+**Status:** twill has no clock of any kind.
+
+This is the whole tool. The requirements are in the header of `src/clock.tw` and
+are repeated here because they are requirements on the runtime and not
+preferences:
+
+- **Monotonic.** A wall clock corrected mid-run produces a negative duration,
+  and a negative duration in a sample set moves the median in the direction
+  that looks like an improvement. `src/clock.tw` discards negative intervals
+  defensively, which limits the damage and does not remove the need.
+- **Nanoseconds.** A fast tensor op runs in microseconds. A millisecond clock
+  measures it as zero, and a harness given zeros reports a median of zero and an
+  IQR of zero, which reads as a perfectly stable, infinitely fast operation.
+- **`I64`, not `F64`.** Nanoseconds since an arbitrary origin fit in an I64 for
+  292 years. An F64 has 53 bits of mantissa and starts losing nanosecond
+  resolution after about 104 days of uptime, silently, and the loss looks like
+  quantisation in the timings.
+- **Cheap, and non-allocating.** The call brackets the work; if it costs a
+  comparable amount, the harness is measuring itself. `clk.probe` measures the
+  overhead and the granularity so a result can say when this was violated, which
+  is the most bobbin can do from outside.
+
+If only one of these entries is ever implemented, this is the one.
+
+### 2. Allocation and memory counters
+
+**Needs:** `mem_counters_available() -> Bool`, `mem_allocs() -> I64`,
+`mem_bytes() -> I64`, `mem_live_bytes() -> I64`, `mem_tensors() -> I64`
+**Used by:** `src/memory.tw` (`read`), `src/harness.tw` (`run`)
+**Status:** twill exposes nothing about memory.
+
+Four counters, and each answers a different question:
+
+- `mem_allocs` is the one that catches a regression. Bytes move with input size
+  and with the allocator's rounding; a count moves when the code allocates
+  somewhere new, which is what changed.
+- `mem_bytes` catches the other regression: the same number of allocations,
+  each larger, which is what a wrong intermediate shape looks like.
+- `mem_live_bytes` is the only one that can go down, and the only one that
+  answers "does this fit".
+- `mem_tensors` is twill-specific and the most useful of the four here. In
+  tensor code one avoidable temporary per element is the difference between a
+  benchmark that fits in cache and one that does not, and no general-purpose
+  allocation count separates a tensor from a slice header.
+
+All must be cheap and must not themselves allocate. The `available` flag exists
+because bobbin has to distinguish "zero allocations" from "cannot measure", and
+printing a zero for the second is the most misleading thing a profiler can do.
+Until they exist, `mem.read()` returns `unavailable()` and every reporter omits
+the memory columns entirely.
+
+### 3. A compiler barrier, or a guarantee there is nothing to barrier against
+
+**Needs:** an operation the optimiser cannot see through, `black_box(x)`
+**Used by:** `src/harness.tw` (`keep`)
+**Status:** twill is interpreted and removes nothing, so this is not blocking
+today. It becomes blocking the day it is not.
+
+A benchmark body's result is discarded, and discarded work is work a compiler
+may delete. Every serious benchmarking library has this and every one of them
+added it after somebody published a number for an empty loop. `bench.keep` is a
+named identity function so that when twill grows an optimiser there is exactly
+one place to fix, and this entry is here so the fix is not forgotten between now
+and then. Filed early on purpose: after the fact it is a retraction.
+
+### 4. Writing files
+
+**Needs:** `write_file(path: Str, contents: Str) -> Res[Unit, Str]`, and a
+reader for what it wrote
+**Used by:** `src/report.tw` (`render_baseline`), and any real runner
+**Status:** listed in section 1.2 of the self-hosting design, not in milestone 1.
+
+Regression tracking needs a stored baseline, and a baseline that cannot be
+written is a comparison against nothing. `render_baseline` produces the text and
+has nowhere to put it. Reading is the same problem in reverse: `read_file` is in
+milestone 1, so parsing a stored baseline is writable today and writing one is
+not, which is a strange half.
+
+`src/report.tw` renders the baseline in the same TOML subset spool reads, so
+whichever of the two grows a parser first, the other can use it.
+
+## Blocking: language features the source assumes
+
+### 5. Function values as parameters and struct fields
+
+**Used by:** `src/harness.tw` (`run`, `batch`, `auto_inner` all take
+`body: fn(I64) -> F64`), `src/suite.tw` (`Case.body` is a stored function)
+**Status:** functions are values in numeric twill; whether a systems-mode
+function may take or store one, and how the type is spelled, is not stated.
+
+There is no way to benchmark a piece of code without being handed it. `Case`
+storing a function in a struct field is the stronger of the two asks, and
+`src/suite.tw` is unwritable without it: a suite is a list of named pieces of
+code, and that is what it is.
+
+The same entry appears in loom's `docs/needs.md` as entry 3. Two independent
+packages hitting it is worth something.
+
+### 6. `break` and `continue`
+
+**Used by:** `src/harness.tw` (`run`, the sampling loop)
+**Status:** `return` exists; neither is in the language guide.
+
+The sampling loop runs until a minimum sample count and a minimum elapsed time
+are both met, or a ceiling is hit. That is four exit conditions checked at the
+bottom of a loop, which is exactly what `break` is for. bobbin uses a `done`
+flag, which is readable enough here and would not be in a loop with real work
+after the check.
+
+### 7. twill's terminal layer, reachable from a package
+
+**Needs:** `src/term/` available as `std/term`, or an equivalent
+**Used by:** `src/report.tw`, which would call it and does not
+**Status:** it exists, in the twill repository, as files.
+
+twill resolves a non-`std/` import as a path relative to the importing file, so
+only `std/` modules are reachable from an installed package. `src/term/` is not
+one. bobbin therefore has no colour and no capability detection, and marks a
+regression with `!!` and an improvement with `++` because two ASCII characters
+are the only emphasis available to it.
+
+This matters more for bobbin than for a library that only prints results. A
+regression in a table of forty benchmarks is something a person has to find by
+eye, and colour is the tool for that. Same entry as loom's 8; it should be
+satisfied once.
+
+## Not blocking, but the source is worse without them
+
+### 8. A test runner
+
+**Would improve:** `tests/`
+**Status:** none. `tests/harness.tw` is a hand-rolled counter.
+
+This is the third byte-identical copy of that file in the ecosystem, after
+spool's and loom's. A `twill test` collecting `*_test.tw`, running each in a
+fresh interpreter and reporting once would delete all three.
+
+### 9. A generic sort, or a comparison-function parameter
+
+**Would improve:** `src/stats.tw` (`sorted`), `src/baseline.tw` (`put`)
+**Status:** no generic sort; see entry 5 for function parameters.
+
+Two more insertion sorts, on top of spool's four and loom's one. Seven. The one
+in `src/stats.tw` is also the hot path of the whole tool: every summary sorts its
+samples, and an insertion sort over a thousand samples is a million comparisons
+in an interpreter. A builtin sort over `Arr[I64]` would be the single largest
+speedup available to this repository.
+
+### 10. `Res[T, E]` and `Opt[T]`
+
+**Used by:** `src/baseline.tw` (`find` returns -1), `src/suite.tw`
+(`validate` returns an empty string for success)
+**Status:** section 1.2, needs generics.
+
+Sentinel returns throughout. `find` returning `-1` is the usual bad one: it is a
+valid I64, nothing forces a caller to check it, and an unchecked `-1` indexes
+from the end of an array in many languages and would here too if `Arr` allowed
+it.
+
+### 11. Sum types and `match`
+
+**Would improve:** `src/baseline.tw` (`verdict_name`, `compare`),
+`src/report.tw` (`human_comparison`)
+**Status:** designed in section 1.2, not implemented.
+
+Six verdicts as I64 constants and two if-chains over them, in different files.
+Adding a seventh verdict compiles and silently falls through to "missing" in one
+place and to the default marker in the other. Exhaustive `match` is what turns
+that into a compile error.
+
+### 12. Integer formatting with a thousands separator, and string padding
+
+**Would improve:** `src/report.tw` (`pad_left`, `pad_right`), `src/clock.tw`
+(`fixed`, `pad_zero`)
+**Status:** `str(x)` exists and produces a shortest round-trip form.
+
+Four hand-rolled formatting helpers, one of which reimplements fixed-point
+decimal output character by character. Column alignment is not a nicety in a
+benchmark table: varying width is what hides the differences the table exists to
+show. loom has the same `fixed` function, copied, which is docs/needs.md entry
+8 wearing a different hat.
+
+### 13. A statistical note, not a language request
+
+**Status:** not a request. Recorded so the decision is not relitigated silently.
+
+There is no significance test in `src/baseline.tw` and that is deliberate. A
+t-test assumes a normality timings do not have. A Mann-Whitney U on a few hundred
+samples reports significance for differences far below what anyone would act on,
+because with enough samples everything is significant. The question a regression
+gate is asked is not "is this difference real" but "is this difference big
+enough to care about", and that is a threshold question, so bobbin uses two
+thresholds and says which one was not met.

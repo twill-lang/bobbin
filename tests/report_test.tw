@@ -1,0 +1,158 @@
+mode systems
+
+import "harness.tw" as t
+import "../src/report.tw" as rep
+import "../src/clock.tw" as clk
+import "../src/memory.tw" as mem
+import "../src/stats.tw" as stats
+import "../src/harness.tw" as bench
+import "../src/baseline.tw" as base
+
+fn result_of(name: Str, samples: Arr[I64], warning: Str) -> bench.Result {
+  let s = stats.summarize(samples)
+  bench.Result {
+    name: name, samples: samples, timing: s, iters: s.n, inner: 1, warmup: 3,
+    memory: mem.unavailable(),
+    clock: clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 },
+    warning: warning,
+  }
+}
+
+fn a_duration_is_shown_in_the_unit_that_reads() {
+  t.equal_str("nanoseconds", clk.format_ns(750), "750ns")
+  t.equal_str("microseconds", clk.format_ns(1500), "1.50us")
+  t.equal_str("milliseconds", clk.format_ns(2500000), "2.50ms")
+  t.equal_str("seconds", clk.format_ns(3250000000), "3.250s")
+}
+
+fn an_impossible_duration_is_named_rather_than_printed() {
+  t.equal_str("a backwards clock", clk.format_ns(-1), "invalid")
+}
+
+fn a_fixed_decimal_carries_out_of_the_fraction() {
+  t.equal_str("0.9999 to three places", clk.fixed(0.9999, 3), "1.000")
+  t.equal_str("a negative keeps its sign", clk.fixed(-0.25, 2), "-0.25")
+}
+
+fn a_human_row_shows_the_spread_and_not_only_the_median() {
+  let row = rep.human_row(result_of("matmul", [100, 102, 98, 101, 99, 100], ""))
+  t.check("the row names the benchmark", len(row) > 28)
+  t.check("the header has all four columns", len(rep.human_header()) > 50)
+}
+
+fn a_clean_run_gets_no_notes() {
+  let notes = rep.human_notes(result_of("matmul", [98, 99, 100, 101, 102, 103, 97, 100, 101, 99], ""))
+  t.equal_i64("nothing to say", len(notes), 0)
+}
+
+fn a_warning_becomes_a_note() {
+  let notes = rep.human_notes(result_of("matmul", [98, 99, 100, 101, 102, 103, 97, 100, 101, 99],
+    "the clock cannot resolve this"))
+  t.equal_i64("one note", len(notes), 1)
+}
+
+fn outliers_are_reported_rather_than_hidden() {
+  let notes = rep.human_notes(result_of("matmul",
+    [100, 101, 99, 100, 102, 98, 101, 100, 99, 2000], ""))
+  t.check("the outlier is mentioned", len(notes) > 0)
+}
+
+fn memory_columns_are_omitted_when_there_are_no_counters() {
+  # A zero in a benchmark table is a measurement, and "we could not measure"
+  # is not zero.
+  let notes = rep.human_notes(result_of("matmul", [98, 99, 100, 101, 102, 103, 97, 100, 101, 99], ""))
+  let i = 0
+  while i < len(notes) {
+    t.check("no note claims an allocation count", not contains(notes[i], "allocs/iter"))
+    i = i + 1
+  }
+}
+
+fn contains(hay: Str, needle: Str) -> Bool {
+  if len(needle) > len(hay) {
+    return false
+  }
+  let i = 0
+  while i <= len(hay) - len(needle) {
+    if hay[i:i + len(needle)] == needle {
+      return true
+    }
+    i = i + 1
+  }
+  false
+}
+
+fn a_json_row_is_one_line_and_carries_the_spread() {
+  let line = rep.json_row(result_of("matmul", [100, 102, 98, 101, 99, 100], ""))
+  t.check("it opens as an object", line[0:1] == "{")
+  t.check("it closes as an object", line[len(line) - 1:len(line)] == "}")
+  t.check("it carries the median", contains(line, "\"median\""))
+  t.check("it carries the interquartile range", contains(line, "\"iqr\""))
+  t.check("it carries the sample count", contains(line, "\"samples\""))
+  t.check("it carries the clock granularity", contains(line, "\"clock_granularity_ns\""))
+  t.check("it says whether memory was measurable", contains(line, "\"memory_available\":false"))
+  t.check("it holds no newline", not contains(line, "\n"))
+}
+
+fn a_quote_in_a_name_does_not_break_the_json() {
+  t.equal_str("a quote is escaped", rep.escape("a\"b"), "a\\\"b")
+  t.equal_str("a backslash is escaped", rep.escape("a\\b"), "a\\\\b")
+}
+
+fn a_baseline_renders_sorted_with_a_fixed_field_order() {
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of("zeta", [100, 100, 100], ""), "ci"))
+  base.put(b, base.entry_of(result_of("alpha", [200, 200, 200], ""), "ci"))
+  let out = rep.render_baseline(b)
+  t.check("it declares a version", contains(out, "version = 1"))
+  t.check("alpha comes before zeta",
+    index_of(out, "\"alpha\"") < index_of(out, "\"zeta\""))
+  t.check("every entry is a table", contains(out, "[[benchmark]]"))
+  t.check("it is committed, so it says so", contains(out, "Commit this file"))
+}
+
+fn index_of(hay: Str, needle: Str) -> I64 {
+  let i = 0
+  while i <= len(hay) - len(needle) {
+    if hay[i:i + len(needle)] == needle {
+      return i
+    }
+    i = i + 1
+  }
+  -1
+}
+
+fn a_summary_line_counts_every_verdict() {
+  let cs: Arr[base.Comparison] = [
+    base.Comparison { name: "a", verdict: base.VERDICT_PASS, base_median_ns: 1.0,
+      new_median_ns: 1.0, relative: 0.0, sigmas: 0.0, alloc_delta: 0, reason: "" },
+    base.Comparison { name: "b", verdict: base.VERDICT_REGRESSED, base_median_ns: 1.0,
+      new_median_ns: 2.0, relative: 1.0, sigmas: 9.0, alloc_delta: 0, reason: "" },
+    base.Comparison { name: "c", verdict: base.VERDICT_NEW, base_median_ns: 0.0,
+      new_median_ns: 1.0, relative: 0.0, sigmas: 0.0, alloc_delta: 0, reason: "" },
+  ]
+  t.equal_str("the counts", rep.summary_line(cs),
+    "3 benchmarks, 1 regressed, 0 improved, 0 inconclusive, 1 new")
+}
+
+fn a_regression_is_marked_so_it_can_be_found_by_eye() {
+  let c = base.Comparison { name: "matmul", verdict: base.VERDICT_REGRESSED,
+    base_median_ns: 100.0, new_median_ns: 200.0, relative: 1.0, sigmas: 9.0,
+    alloc_delta: 0, reason: "100.0% slower" }
+  t.equal_str("regressions carry a marker", rep.human_comparison(c)[0:2], "!!")
+}
+
+a_duration_is_shown_in_the_unit_that_reads()
+an_impossible_duration_is_named_rather_than_printed()
+a_fixed_decimal_carries_out_of_the_fraction()
+a_human_row_shows_the_spread_and_not_only_the_median()
+a_clean_run_gets_no_notes()
+a_warning_becomes_a_note()
+outliers_are_reported_rather_than_hidden()
+memory_columns_are_omitted_when_there_are_no_counters()
+a_json_row_is_one_line_and_carries_the_spread()
+a_quote_in_a_name_does_not_break_the_json()
+a_baseline_renders_sorted_with_a_fixed_field_order()
+a_summary_line_counts_every_verdict()
+a_regression_is_marked_so_it_can_be_found_by_eye()
+t.report("report")

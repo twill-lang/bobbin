@@ -1,0 +1,217 @@
+mode systems
+
+# harness.tw: warm up, run repeatedly, keep the samples.
+#
+# The measurement protocol, and the reason for each part:
+#
+# 1. Warmup runs are executed and discarded. The first run of anything pays for
+#    a cold instruction cache, a cold data cache, lazily initialised state and,
+#    on any runtime with one, a JIT that has not seen the code. Including it
+#    makes the first benchmark in a file look slower than the same benchmark
+#    run second, which is an ordering effect that people spend afternoons on.
+#    Warmup is not optional and it is not zero by default.
+#
+# 2. Each *sample* times a batch of `inner` iterations and divides. When one
+#    operation costs less than a few hundred clock ticks, the timing call
+#    dominates it, and what gets measured is the clock. Batching amortises the
+#    two clock reads over many iterations. The cost is that a batch cannot see
+#    the variation between individual iterations, which is why `inner` is
+#    chosen so a batch lasts a millisecond or so and not longer.
+#
+# 3. Samples are collected until both a minimum count and a minimum total time
+#    are reached. A fixed sample count is wrong in both directions: 100 samples
+#    of a 10-second operation is a 17-minute benchmark, and 100 samples of a
+#    100ns operation is 10 microseconds of evidence.
+#
+# 4. Nothing is discarded. Outliers are counted and reported by src/stats.tw,
+#    never removed. Discarding the slow samples is how a benchmark stops being
+#    able to see the interference it is supposed to warn about.
+#
+# 5. The reported figure is the median of the per-iteration times, with the
+#    interquartile range as the spread. See the argument at the top of
+#    src/stats.tw.
+
+import "clock.tw" as clk
+import "stats.tw" as stats
+import "memory.tw" as mem
+
+struct Options {
+  # Iterations per timed sample. Raise it until a sample lasts around a
+  # millisecond; `auto_inner` below does that.
+  inner: I64,
+  # Warmup batches, executed and discarded.
+  warmup: I64,
+  # Stop when both are satisfied.
+  min_samples: I64,
+  min_total_ns: I64,
+  # A hard ceiling, so a benchmark of a slow operation cannot run forever.
+  max_samples: I64,
+  max_total_ns: I64,
+  # Measure allocations as well as time. Off by default: reading counters
+  # around every batch costs time, and the timing is the primary measurement.
+  measure_memory: Bool,
+}
+
+fn defaults() -> Options {
+  Options {
+    inner: 1,
+    warmup: 3,
+    min_samples: 30,
+    # One second of evidence. Below about 20 samples the interquartile range is
+    # estimated from too few points to be a stable threshold, and 30 is the
+    # smallest round number that comfortably clears it.
+    min_total_ns: 1000000000,
+    max_samples: 1000,
+    max_total_ns: 30000000000,
+    measure_memory: false,
+  }
+}
+
+fn quick() -> Options {
+  let o = defaults()
+  o.warmup = 1
+  o.min_samples = 10
+  o.min_total_ns = 100000000
+  o
+}
+
+struct Result {
+  name: Str,
+  # Per-iteration nanoseconds, one entry per sample. Kept raw so a caller can
+  # summarise differently, and so the report can show the distribution rather
+  # than only its summary.
+  samples: Arr[I64],
+  timing: stats.Summary,
+  iters: I64,
+  inner: I64,
+  warmup: I64,
+  memory: mem.MemSample,
+  clock: clk.ClockInfo,
+  # Set when the samples cannot support a verdict: a median at or below the
+  # clock's granularity, or a relative IQR wide enough that a threshold
+  # comparison would be noise. The reporters print it and the comparison
+  # refuses to call a regression.
+  warning: Str,
+}
+
+let NOISE_LIMIT = 0.05
+
+# Run `body` under the protocol above. `body` takes the iteration index so that
+# a benchmark can vary its input and so the optimiser, when twill has one,
+# cannot hoist the call out of the loop.
+#
+# The return value of `body` is fed to `keep`, which exists for the same reason:
+# work whose result is discarded is work a compiler may delete. It does nothing
+# today and it is the right place for a compiler barrier when there is one.
+# See docs/needs.md entry 3.
+fn run(name: Str, opts: Options, body: fn(I64) -> F64) -> Result {
+  let info = clk.probe(64)
+
+  let w = 0
+  while w < opts.warmup {
+    batch(opts.inner, body)
+    w = w + 1
+  }
+
+  let before = mem.unavailable()
+  if opts.measure_memory {
+    before = mem.read()
+  }
+
+  let samples: Arr[I64] = []
+  let total = 0
+  let iters = 0
+  # A `done` flag rather than a `break`, because twill has no `break`. See
+  # docs/needs.md entry 6.
+  let done = false
+  while not done {
+    let start = clk.now_ns()
+    batch(opts.inner, body)
+    let took = clk.elapsed_ns(start, clk.now_ns())
+    # A backwards clock produces -1 and the sample is dropped rather than
+    # recorded. Recording it would put a fast outlier in the sample and pull
+    # the first quartile down.
+    if took >= 0 {
+      push(samples, took / opts.inner)
+      total = total + took
+      iters = iters + opts.inner
+    }
+    if len(samples) >= opts.max_samples or total >= opts.max_total_ns {
+      done = true
+    }
+    if len(samples) >= opts.min_samples and total >= opts.min_total_ns {
+      done = true
+    }
+  }
+
+  let after = mem.unavailable()
+  if opts.measure_memory {
+    after = mem.read()
+  }
+
+  let timing = stats.summarize(samples)
+  Result {
+    name: name,
+    samples: samples,
+    timing: timing,
+    iters: iters,
+    inner: opts.inner,
+    warmup: opts.warmup,
+    memory: mem.per_iter(mem.delta(before, after), iters),
+    clock: info,
+    warning: diagnose(timing, info),
+  }
+}
+
+fn batch(inner: I64, body: fn(I64) -> F64) {
+  let i = 0
+  while i < inner {
+    keep(body(i))
+    i = i + 1
+  }
+}
+
+# A sink for a benchmark's result. It must not be removable and it must cost
+# nothing. Today it is neither: there is no compiler to remove it and no
+# barrier to stop one later. Written as a named function so that when twill
+# grows an optimiser there is exactly one place to fix.
+fn keep(x: F64) -> F64 = x
+
+# Pick an `inner` that makes a sample last about a millisecond, by timing the
+# body once and dividing. Called before `run` when the caller does not know the
+# scale of what they are measuring, which is most of the time.
+fn auto_inner(body: fn(I64) -> F64) -> I64 {
+  let target = 1000000
+  let n = 1
+  while n < 100000000 {
+    let start = clk.now_ns()
+    batch(n, body)
+    let took = clk.elapsed_ns(start, clk.now_ns())
+    if took >= target {
+      return n
+    }
+    # Grow geometrically rather than extrapolate from one short timing: a
+    # sub-granularity measurement extrapolates to nonsense, and growing costs
+    # at most one extra round of work.
+    n = n * 4
+  }
+  n
+}
+
+# The two conditions under which a number here should not be trusted, checked
+# once and attached to the result so every reporter carries them.
+fn diagnose(s: stats.Summary, info: clk.ClockInfo) -> Str {
+  if s.n == 0 {
+    return "no samples were collected"
+  }
+  if info.granularity_ns > 0 and s.median <= f64(info.granularity_ns) * 2.0 {
+    return "median " + clk.fixed(s.median, 1)
+      + "ns is within twice the clock granularity of "
+      + str(info.granularity_ns) + "ns; raise inner"
+  }
+  if stats.relative_iqr(s) > NOISE_LIMIT {
+    return "interquartile range is " + clk.fixed(stats.relative_iqr(s) * 100.0, 1)
+      + "% of the median; this machine is too noisy for a small threshold"
+  }
+  ""
+}

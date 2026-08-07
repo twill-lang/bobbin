@@ -1,0 +1,136 @@
+mode systems
+
+# clock.tw: the one thing a benchmarking tool cannot fake.
+#
+# bobbin needs a monotonic clock with a resolution well below the time of the
+# thing being measured. twill has neither a clock nor a resolution guarantee, so
+# this file is a stated interface with nothing behind it, and everything else in
+# bobbin is written against the interface. See docs/needs.md entry 1.
+#
+# The requirements, written here because they are what the language has to
+# provide and not what bobbin would like:
+#
+#   monotonic         it must never go backwards. A wall clock corrected by NTP
+#                     mid-run produces a negative duration, and a negative
+#                     duration in a set of samples moves the median in the
+#                     direction that looks like an improvement.
+#   nanoseconds       a fast tensor op runs in microseconds. A millisecond clock
+#                     measures it as zero, and a harness given zeros reports a
+#                     median of zero and an IQR of zero, which reads as a
+#                     perfectly stable, infinitely fast operation.
+#   I64               nanoseconds since an arbitrary epoch fits in an I64 for
+#                     292 years. An F64 has 53 bits of mantissa and starts
+#                     losing nanosecond resolution after about 104 days of
+#                     uptime, silently, and the loss looks like quantisation in
+#                     the timings.
+#   cheap             the call has to cost far less than the work it brackets,
+#                     or the harness is measuring itself.
+
+# Nanoseconds from an unspecified origin. Only differences are meaningful.
+fn now_ns() -> I64 = mono_ns()
+
+fn elapsed_ns(start: I64, end: I64) -> I64 {
+  # Defensive because the alternative is silent corruption of a median. If a
+  # clock does go backwards, the sample is discarded by the harness rather than
+  # recorded as a fast run.
+  if end < start {
+    return -1
+  }
+  end - start
+}
+
+fn ns_to_ms(ns: I64) -> F64 = f64(ns) / 1000000.0
+fn ns_to_us(ns: I64) -> F64 = f64(ns) / 1000.0
+fn ns_to_s(ns: I64) -> F64 = f64(ns) / 1000000000.0
+
+# A duration formatted in the unit that gives it three or four significant
+# figures. A table of timings where one row is in nanoseconds and the next is in
+# seconds is unreadable, and one where everything is in nanoseconds is a column
+# of ten-digit integers.
+fn format_ns(ns: I64) -> Str {
+  if ns < 0 {
+    return "invalid"
+  }
+  if ns < 1000 {
+    return str(ns) + "ns"
+  }
+  if ns < 1000000 {
+    return fixed(ns_to_us(ns), 2) + "us"
+  }
+  if ns < 1000000000 {
+    return fixed(ns_to_ms(ns), 2) + "ms"
+  }
+  fixed(ns_to_s(ns), 3) + "s"
+}
+
+# A fixed-width decimal. `str` on an F64 gives a shortest round-trip form, which
+# is right for a machine reading it back and wrong for a column of timings,
+# where varying width hides the differences the column exists to show.
+fn fixed(x: F64, places: I64) -> Str {
+  let neg = x < 0.0
+  let v = x
+  if neg {
+    v = -v
+  }
+  let scale = 1.0
+  let i = 0
+  while i < places {
+    scale = scale * 10.0
+    i = i + 1
+  }
+  let whole = i64(v)
+  let frac = i64((v - f64(whole)) * scale + 0.5)
+  # Rounding the fraction can carry. Without this, 0.9996 to three places
+  # prints as 0.1000.
+  if f64(frac) >= scale {
+    frac = 0
+    whole = whole + 1
+  }
+  let out = str(whole) + "." + pad_zero(str(frac), places)
+  if neg {
+    return "-" + out
+  }
+  out
+}
+
+fn pad_zero(s: Str, width: I64) -> Str {
+  let out = s
+  while len(out) < width {
+    out = "0" + out
+  }
+  out
+}
+
+# The clock's own overhead and its granularity, measured rather than assumed. A
+# harness that does not know its clock's resolution cannot tell a genuinely fast
+# operation from one below the clock's floor, and reporting the second as if it
+# were the first is the most misleading thing a benchmark can do.
+struct ClockInfo {
+  # Median cost of a now_ns() call, in nanoseconds.
+  overhead_ns: I64,
+  # Smallest non-zero difference two consecutive calls ever produced. If the
+  # clock ticks at 100ns, no measurement below 100ns means anything.
+  granularity_ns: I64,
+}
+
+fn probe(samples: I64) -> ClockInfo {
+  let smallest = -1
+  let total = 0
+  let i = 0
+  while i < samples {
+    let a = now_ns()
+    let b = now_ns()
+    let d = b - a
+    total = total + d
+    if d > 0 {
+      if smallest < 0 or d < smallest {
+        smallest = d
+      }
+    }
+    i = i + 1
+  }
+  if samples <= 0 {
+    return ClockInfo { overhead_ns: -1, granularity_ns: -1 }
+  }
+  ClockInfo { overhead_ns: total / samples, granularity_ns: smallest }
+}

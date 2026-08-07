@@ -1,0 +1,175 @@
+mode systems
+
+import "harness.tw" as t
+import "../src/baseline.tw" as base
+import "../src/stats.tw" as stats
+import "../src/harness.tw" as bench
+import "../src/memory.tw" as mem
+import "../src/clock.tw" as clk
+
+# A result built from literal samples, so every comparison test is a function
+# of numbers written in this file and not of what the machine was doing.
+fn result_of(name: Str, samples: Arr[I64]) -> bench.Result {
+  let s = stats.summarize(samples)
+  bench.Result {
+    name: name,
+    samples: samples,
+    timing: s,
+    iters: s.n,
+    inner: 1,
+    warmup: 3,
+    memory: mem.unavailable(),
+    clock: clk.ClockInfo { overhead_ns: 20, granularity_ns: 1 },
+    warning: "",
+  }
+}
+
+fn stored(name: Str, samples: Arr[I64]) -> base.Baseline {
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of(name, samples), "test"))
+  b
+}
+
+# 1000 +/- 10, which is a one percent relative interquartile range: a quiet
+# machine measuring a stable operation.
+fn clean(centre: I64) -> Arr[I64] {
+  [centre - 10, centre - 6, centre - 3, centre - 1, centre,
+   centre + 1, centre + 3, centre + 6, centre + 10, centre + 2]
+}
+
+fn an_unchanged_benchmark_passes() {
+  let b = stored("matmul", clean(1000))
+  let c = base.compare(result_of("matmul", clean(1000)), b, base.default_thresholds())
+  t.equal_str("unchanged is a pass", base.verdict_name(c.verdict), "pass")
+}
+
+fn a_change_smaller_than_the_relative_floor_passes_however_confident() {
+  # 2% slower, far more than three sigmas on this tight sample, and still under
+  # the 5% floor. This is condition 1 doing its job: statistically certain and
+  # not worth anyone's attention.
+  let b = stored("matmul", clean(1000))
+  let c = base.compare(result_of("matmul", clean(1020)), b, base.default_thresholds())
+  t.equal_str("a confident 2% is still a pass", base.verdict_name(c.verdict), "pass")
+  t.check("and the sigmas were large", c.sigmas > 3.0)
+}
+
+fn a_change_larger_than_the_floor_but_lost_in_noise_is_not_a_regression() {
+  # 8% slower, over the relative floor, on samples whose interquartile range is
+  # a fifth of their median. The shift is real arithmetic and the data cannot
+  # support calling it, so the verdict is not "regressed".
+  let noisy: Arr[I64] = [700, 800, 900, 1000, 1100, 1200, 1300, 900, 1100, 1000]
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of("noisy", noisy), "test"))
+  let shifted: Arr[I64] = [760, 860, 960, 1080, 1190, 1300, 1400, 970, 1190, 1080]
+  let c = base.compare(result_of("noisy", shifted), b, base.default_thresholds())
+  t.check("a noisy shift is not called a regression",
+    c.verdict != base.VERDICT_REGRESSED)
+}
+
+fn a_large_clear_slowdown_is_a_regression() {
+  let b = stored("matmul", clean(1000))
+  let c = base.compare(result_of("matmul", clean(1400)), b, base.default_thresholds())
+  t.equal_str("40% slower on a quiet machine", base.verdict_name(c.verdict), "regressed")
+  t.near("the relative shift is reported", c.relative, 0.4, 0.01)
+  t.check("the reason says how much", len(c.reason) > 0)
+}
+
+fn a_large_clear_speedup_is_reported_rather_than_passed_over() {
+  let b = stored("matmul", clean(1000))
+  let c = base.compare(result_of("matmul", clean(600)), b, base.default_thresholds())
+  t.equal_str("40% faster is reported", base.verdict_name(c.verdict), "improved")
+  t.check("the relative shift is negative", c.relative < 0.0)
+}
+
+fn a_benchmark_with_no_baseline_is_new_and_not_a_failure() {
+  let b = base.new_baseline()
+  let c = base.compare(result_of("fresh", clean(1000)), b, base.default_thresholds())
+  t.equal_str("no entry means new", base.verdict_name(c.verdict), "new")
+  t.check("new does not fail a gate", not base.any_regression([c]))
+}
+
+fn a_run_carrying_a_warning_cannot_produce_a_verdict() {
+  let b = stored("matmul", clean(1000))
+  let r = result_of("matmul", clean(1400))
+  r.warning = "median is within twice the clock granularity"
+  let c = base.compare(r, b, base.default_thresholds())
+  t.equal_str("a warned run is inconclusive", base.verdict_name(c.verdict), "inconclusive")
+  t.check("and does not fail a gate", not base.any_regression([c]))
+}
+
+fn a_run_too_noisy_for_the_threshold_is_inconclusive_rather_than_a_pass() {
+  # The dangerous direction. Reporting PASS from unusable data is what lets a
+  # regression through, so doubt resolves towards saying so.
+  let b = stored("matmul", clean(1000))
+  let noisy: Arr[I64] = [500, 700, 900, 1100, 1300, 1500, 1700, 900, 1300, 1100]
+  let c = base.compare(result_of("matmul", noisy), b, base.default_thresholds())
+  t.equal_str("too noisy to judge", base.verdict_name(c.verdict), "inconclusive")
+}
+
+fn identical_samples_mean_the_clock_is_too_coarse_not_that_the_code_is_stable() {
+  let flat: Arr[I64] = [1000, 1000, 1000, 1000, 1000, 1000]
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of("flat", flat), "test"))
+  let c = base.compare(result_of("flat", [1000, 1000, 1000, 1000, 1000, 1000]),
+                       b, base.default_thresholds())
+  t.equal_str("zero spread is inconclusive", base.verdict_name(c.verdict), "inconclusive")
+}
+
+fn a_stricter_threshold_can_be_asked_for() {
+  let th = base.Thresholds { min_relative: 0.01, sigmas: 2.0, max_relative_iqr: 0.10 }
+  let b = stored("matmul", clean(1000))
+  let c = base.compare(result_of("matmul", clean(1020)), b, th)
+  t.equal_str("a 1% threshold catches a 2% shift", base.verdict_name(c.verdict), "regressed")
+}
+
+fn entries_are_kept_sorted_so_the_file_diffs_cleanly() {
+  let b = base.new_baseline()
+  base.put(b, base.entry_of(result_of("zeta", clean(1000)), ""))
+  base.put(b, base.entry_of(result_of("alpha", clean(1000)), ""))
+  base.put(b, base.entry_of(result_of("mid", clean(1000)), ""))
+  t.equal_str("first", b.entries[0].name, "alpha")
+  t.equal_str("second", b.entries[1].name, "mid")
+  t.equal_str("third", b.entries[2].name, "zeta")
+}
+
+fn recording_the_same_benchmark_twice_replaces_rather_than_duplicates() {
+  let b = stored("matmul", clean(1000))
+  base.put(b, base.entry_of(result_of("matmul", clean(2000)), "later"))
+  t.equal_i64("one entry", len(b.entries), 1)
+  t.near("the later measurement won", b.entries[0].median_ns, 2000.5, 5.0)
+}
+
+fn a_baseline_entry_that_was_not_run_is_named() {
+  let b = stored("matmul", clean(1000))
+  base.put(b, base.entry_of(result_of("conv", clean(1000)), "test"))
+  let ran: Arr[bench.Result] = [result_of("matmul", clean(1000))]
+  let gone = base.missing(b, ran)
+  t.equal_i64("one benchmark went missing", len(gone), 1)
+  t.equal_str("and it is named", gone[0], "conv")
+}
+
+fn a_gate_fails_only_on_a_regression() {
+  let b = stored("matmul", clean(1000))
+  let pass = base.compare(result_of("matmul", clean(1000)), b, base.default_thresholds())
+  let fast = base.compare(result_of("matmul", clean(600)), b, base.default_thresholds())
+  let slow = base.compare(result_of("matmul", clean(1400)), b, base.default_thresholds())
+  t.check("a pass does not fail the gate", not base.any_regression([pass]))
+  t.check("an improvement does not fail the gate", not base.any_regression([fast]))
+  t.check("a regression does", base.any_regression([pass, fast, slow]))
+}
+
+an_unchanged_benchmark_passes()
+a_change_smaller_than_the_relative_floor_passes_however_confident()
+a_change_larger_than_the_floor_but_lost_in_noise_is_not_a_regression()
+a_large_clear_slowdown_is_a_regression()
+a_large_clear_speedup_is_reported_rather_than_passed_over()
+a_benchmark_with_no_baseline_is_new_and_not_a_failure()
+a_run_carrying_a_warning_cannot_produce_a_verdict()
+a_run_too_noisy_for_the_threshold_is_inconclusive_rather_than_a_pass()
+identical_samples_mean_the_clock_is_too_coarse_not_that_the_code_is_stable()
+a_stricter_threshold_can_be_asked_for()
+entries_are_kept_sorted_so_the_file_diffs_cleanly()
+recording_the_same_benchmark_twice_replaces_rather_than_duplicates()
+a_gate_fails_only_on_a_regression()
+a_baseline_entry_that_was_not_run_is_named()
+t.report("baseline")

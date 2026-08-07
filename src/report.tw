@@ -1,0 +1,222 @@
+mode systems
+
+# report.tw: two outputs, both complete.
+#
+# Human and machine output are separate functions producing separate documents,
+# not one function with a flag that drops the decoration. A format that is
+# sometimes parseable is a format nothing parses, and a human format derived by
+# stripping punctuation from JSON reads like it.
+#
+# What both carry, and why: median, interquartile range, minimum and sample
+# count, always, on every row. A benchmark result reported as a single number
+# cannot be argued with. The IQR is what says whether the number means anything,
+# and the minimum is the closest observable thing to the interference-free cost,
+# so a large gap between minimum and median is the signal that the machine, and
+# not the code, is what got measured.
+#
+# The mean is printed last and labelled. It answers a different question, and
+# putting it first is what makes people compare means.
+#
+# There is no colour. twill's terminal layer lives in its own repository as
+# files, and only std/ modules are reachable from an installed package, so
+# bobbin cannot call it. See docs/needs.md entry 7.
+
+import "harness.tw" as bench
+import "stats.tw" as stats
+import "clock.tw" as clk
+import "baseline.tw" as base
+
+fn pad_right(s: Str, width: I64) -> Str {
+  let out = s
+  while len(out) < width {
+    out = out + " "
+  }
+  out
+}
+
+fn pad_left(s: Str, width: I64) -> Str {
+  let out = s
+  while len(out) < width {
+    out = " " + out
+  }
+  out
+}
+
+# ---- human ----------------------------------------------------------------
+
+fn human_header() -> Str {
+  pad_right("benchmark", 28) + pad_left("median", 12) + pad_left("iqr", 12)
+    + pad_left("min", 12) + pad_left("n", 6)
+}
+
+fn human_row(r: bench.Result) -> Str {
+  pad_right(r.name, 28)
+    + pad_left(clk.format_ns(i64(r.timing.median)), 12)
+    + pad_left(clk.format_ns(i64(r.timing.iqr)), 12)
+    + pad_left(clk.format_ns(r.timing.min), 12)
+    + pad_left(str(r.timing.n), 6)
+}
+
+# The lines below a row. Printed only when they say something: a benchmark with
+# no outliers, no warning and no memory data gets one line, and a table where
+# every row is three lines is a table nobody reads to the end of.
+fn human_notes(r: bench.Result) -> Arr[Str] {
+  let out: Arr[Str] = []
+  if len(r.warning) > 0 {
+    push(out, "    warning: " + r.warning)
+  }
+  if r.timing.outliers > 0 {
+    push(out, "    " + str(r.timing.outliers) + " of " + str(r.timing.n)
+      + " samples above the outlier fence; max was " + clk.format_ns(r.timing.max))
+  }
+  if stats.median_over_min(r.timing) > 1.5 {
+    push(out, "    median is " + clk.fixed(stats.median_over_min(r.timing), 2)
+      + "x the fastest sample; the machine is interfering")
+  }
+  if r.memory.available {
+    push(out, "    " + str(r.memory.allocs) + " allocs/iter, "
+      + str(r.memory.tensors) + " tensors/iter")
+  }
+  out
+}
+
+fn human_footer(r: bench.Result) -> Str {
+  "    mean " + clk.format_ns(i64(r.timing.mean))
+    + " (for total wall time, not for comparison)"
+}
+
+fn human_comparison(c: base.Comparison) -> Str {
+  let arrow = "  "
+  if c.verdict == base.VERDICT_REGRESSED {
+    arrow = "!!"
+  }
+  if c.verdict == base.VERDICT_IMPROVED {
+    arrow = "++"
+  }
+  if c.verdict == base.VERDICT_INCONCLUSIVE {
+    arrow = "??"
+  }
+  arrow + " " + pad_right(c.name, 28)
+    + pad_left(clk.format_ns(i64(c.base_median_ns)), 12)
+    + " -> " + pad_left(clk.format_ns(i64(c.new_median_ns)), 12)
+    + "  " + pad_right(base.verdict_name(c.verdict), 13)
+    + c.reason
+}
+
+# ---- machine --------------------------------------------------------------
+
+# One JSON object per benchmark, one per line. Line-delimited rather than one
+# array, so a run that is killed half way through still produces a file every
+# line of which parses, and so appending a run is appending lines.
+fn json_row(r: bench.Result) -> Str {
+  "{\"name\":\"" + r.name + "\""
+    + ",\"unit\":\"ns\""
+    + ",\"median\":" + str(r.timing.median)
+    + ",\"q1\":" + str(r.timing.q1)
+    + ",\"q3\":" + str(r.timing.q3)
+    + ",\"iqr\":" + str(r.timing.iqr)
+    + ",\"min\":" + str(r.timing.min)
+    + ",\"max\":" + str(r.timing.max)
+    + ",\"mean\":" + str(r.timing.mean)
+    + ",\"robust_sigma\":" + str(r.timing.robust_sigma)
+    + ",\"samples\":" + str(r.timing.n)
+    + ",\"outliers\":" + str(r.timing.outliers)
+    + ",\"iters\":" + str(r.iters)
+    + ",\"inner\":" + str(r.inner)
+    + ",\"warmup\":" + str(r.warmup)
+    + ",\"clock_granularity_ns\":" + str(r.clock.granularity_ns)
+    + ",\"clock_overhead_ns\":" + str(r.clock.overhead_ns)
+    + ",\"memory_available\":" + json_bool(r.memory.available)
+    + ",\"allocs_per_iter\":" + str(r.memory.allocs)
+    + ",\"bytes_per_iter\":" + str(r.memory.bytes)
+    + ",\"tensors_per_iter\":" + str(r.memory.tensors)
+    + ",\"warning\":\"" + escape(r.warning) + "\"}"
+}
+
+fn json_comparison(c: base.Comparison) -> Str {
+  "{\"name\":\"" + c.name + "\""
+    + ",\"verdict\":\"" + base.verdict_name(c.verdict) + "\""
+    + ",\"base_median_ns\":" + str(c.base_median_ns)
+    + ",\"new_median_ns\":" + str(c.new_median_ns)
+    + ",\"relative\":" + str(c.relative)
+    + ",\"sigmas\":" + str(c.sigmas)
+    + ",\"alloc_delta\":" + str(c.alloc_delta)
+    + ",\"reason\":\"" + escape(c.reason) + "\"}"
+}
+
+fn json_bool(b: Bool) -> Str {
+  if b {
+    return "true"
+  }
+  "false"
+}
+
+# Quotes and backslashes only. Every string bobbin emits is a benchmark name or
+# a message this repository wrote, so control characters cannot appear; a full
+# escaper here would be code with no way to reach it.
+fn escape(s: Str) -> Str {
+  let out = ""
+  let i = 0
+  while i < len(s) {
+    let b = s[i]
+    if b == 34 or b == 92 {
+      out = out + "\\"
+    }
+    out = out + chr(b)
+    i = i + 1
+  }
+  out
+}
+
+# ---- the baseline file ----------------------------------------------------
+
+# The stored baseline, in the same TOML subset spool reads: comments, one-level
+# tables, quoted strings. Sorted by name, fixed field order, so the file is
+# stable and a diff shows what moved.
+fn render_baseline(b: base.Baseline) -> Str {
+  let out = "# bobbin baseline. Generated. Commit this file.\n"
+    + "\n"
+    + "version = " + str(b.version) + "\n"
+  let i = 0
+  while i < len(b.entries) {
+    let e = b.entries[i]
+    out = out + "\n[[benchmark]]\n"
+      + "name = \"" + e.name + "\"\n"
+      + "median_ns = " + str(e.median_ns) + "\n"
+      + "iqr_ns = " + str(e.iqr_ns) + "\n"
+      + "min_ns = " + str(e.min_ns) + "\n"
+      + "samples = " + str(e.n) + "\n"
+      + "allocs = " + str(e.allocs) + "\n"
+      + "bytes = " + str(e.bytes) + "\n"
+      + "note = \"" + escape(e.note) + "\"\n"
+    i = i + 1
+  }
+  out
+}
+
+fn summary_line(cs: Arr[base.Comparison]) -> Str {
+  let regressed = 0
+  let improved = 0
+  let inconclusive = 0
+  let new_ones = 0
+  let i = 0
+  while i < len(cs) {
+    let v = cs[i].verdict
+    if v == base.VERDICT_REGRESSED {
+      regressed = regressed + 1
+    }
+    if v == base.VERDICT_IMPROVED {
+      improved = improved + 1
+    }
+    if v == base.VERDICT_INCONCLUSIVE {
+      inconclusive = inconclusive + 1
+    }
+    if v == base.VERDICT_NEW {
+      new_ones = new_ones + 1
+    }
+    i = i + 1
+  }
+  str(len(cs)) + " benchmarks, " + str(regressed) + " regressed, "
+    + str(improved) + " improved, " + str(inconclusive) + " inconclusive, "
+    + str(new_ones) + " new"
+}

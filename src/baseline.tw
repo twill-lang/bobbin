@@ -1,0 +1,294 @@
+mode systems
+
+# baseline.tw: comparing a run against a stored one without crying wolf.
+#
+# The failure this file is arranged to avoid: a regression gate that fails on
+# any change. Timings differ run to run on the same binary, by several percent
+# on a laptop and by more on shared CI, and a gate that trips on that gets
+# disabled within a week. A disabled gate catches nothing, so a gate that is too
+# strict is strictly worse than one that is slightly loose.
+#
+# The verdict therefore needs two conditions, and both have to hold:
+#
+#   1. The relative shift must exceed a floor. A one percent change is not
+#      worth anyone's attention regardless of how confidently it was measured,
+#      and on most machines it cannot be measured confidently anyway.
+#
+#   2. The shift must be large compared with the measured noise. This is the
+#      condition that adapts. It compares the difference in medians against the
+#      robust spread of the two sample sets, using IQR/1.349, which equals the
+#      standard deviation for a normal distribution and does not blow up when
+#      one sample is twenty times the rest. The larger of the two spreads is
+#      used, because the noisier of the two runs is what limits what can be
+#      concluded.
+#
+# Condition 1 alone fails on a quiet machine measuring a real but irrelevant
+# change. Condition 2 alone fails on a very quiet machine, where a 0.5% shift
+# is many sigmas and still nothing. Requiring both is what makes the gate
+# survive contact with CI.
+#
+# There is no statistical test here and that is deliberate. A t-test assumes
+# normality that timings do not have, and a Mann-Whitney U on a few hundred
+# samples reports significance for differences far below what anyone would act
+# on, because with enough samples everything is significant. The question a
+# regression gate is asked is not "is this difference real" but "is this
+# difference big enough to care about", and that is a threshold question.
+
+import "stats.tw" as stats
+import "harness.tw" as bench
+import "clock.tw" as clk
+
+struct Thresholds {
+  # Condition 1: the smallest relative change worth reporting.
+  min_relative: F64,
+  # Condition 2: how many robust sigmas the median shift must exceed.
+  sigmas: F64,
+  # Above this relative IQR the machine is judged too noisy and every verdict
+  # becomes INCONCLUSIVE rather than PASS. Reporting PASS from unusable data is
+  # the failure mode that lets a regression through, so the doubt is resolved
+  # towards saying so.
+  max_relative_iqr: F64,
+}
+
+fn default_thresholds() -> Thresholds {
+  # 5% and 3 sigmas. 5% because it is roughly the run-to-run spread of a quiet
+  # laptop, so anything smaller is not measurable there; 3 sigmas because at 2
+  # a suite of forty benchmarks produces a false alarm most runs.
+  Thresholds { min_relative: 0.05, sigmas: 3.0, max_relative_iqr: 0.10 }
+}
+
+let VERDICT_PASS = 0
+let VERDICT_REGRESSED = 1
+let VERDICT_IMPROVED = 2
+let VERDICT_INCONCLUSIVE = 3
+let VERDICT_NEW = 4
+let VERDICT_MISSING = 5
+
+fn verdict_name(v: I64) -> Str {
+  if v == VERDICT_PASS {
+    return "pass"
+  }
+  if v == VERDICT_REGRESSED {
+    return "regressed"
+  }
+  if v == VERDICT_IMPROVED {
+    return "improved"
+  }
+  if v == VERDICT_INCONCLUSIVE {
+    return "inconclusive"
+  }
+  if v == VERDICT_NEW {
+    return "new"
+  }
+  "missing"
+}
+
+# One stored measurement. Medians and IQRs rather than raw samples: a baseline
+# file is committed and diffed, and a file holding a thousand raw timings per
+# benchmark is neither.
+struct Entry {
+  name: Str,
+  median_ns: F64,
+  iqr_ns: F64,
+  min_ns: I64,
+  n: I64,
+  allocs: I64,
+  bytes: I64,
+  # Free-form, for the machine and the commit. Recorded and shown, never
+  # compared: a baseline recorded on different hardware is a judgement call for
+  # a person, and refusing to compare would make the file useless on CI where
+  # the runner changes.
+  note: Str,
+}
+
+struct Baseline {
+  version: I64,
+  entries: Arr[Entry],
+}
+
+let BASELINE_VERSION = 1
+
+fn new_baseline() -> Baseline {
+  let e: Arr[Entry] = []
+  Baseline { version: BASELINE_VERSION, entries: e }
+}
+
+fn entry_of(r: bench.Result, note: Str) -> Entry {
+  Entry {
+    name: r.name,
+    median_ns: r.timing.median,
+    iqr_ns: r.timing.iqr,
+    min_ns: r.timing.min,
+    n: r.timing.n,
+    allocs: r.memory.allocs,
+    bytes: r.memory.bytes,
+    note: note,
+  }
+}
+
+fn find(b: Baseline, name: Str) -> I64 {
+  let i = 0
+  while i < len(b.entries) {
+    if b.entries[i].name == name {
+      return i
+    }
+    i = i + 1
+  }
+  -1
+}
+
+# Insert or replace, keeping the array sorted by name. Sorted because a
+# baseline file is committed, and a file whose line order depends on the order
+# benchmarks happened to run produces a diff on every update.
+fn put(b: Baseline, e: Entry) {
+  let at = find(b, e.name)
+  if at >= 0 {
+    b.entries[at] = e
+    return
+  }
+  push(b.entries, e)
+  let j = len(b.entries) - 1
+  while j > 0 and b.entries[j - 1].name > b.entries[j].name {
+    let tmp = b.entries[j - 1]
+    b.entries[j - 1] = b.entries[j]
+    b.entries[j] = tmp
+    j = j - 1
+  }
+}
+
+struct Comparison {
+  name: Str,
+  verdict: I64,
+  base_median_ns: F64,
+  new_median_ns: F64,
+  # Positive means slower.
+  relative: F64,
+  # The median shift measured in robust sigmas of the noisier of the two runs.
+  sigmas: F64,
+  alloc_delta: I64,
+  reason: Str,
+}
+
+fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
+  let at = find(b, r.name)
+  if at < 0 {
+    return Comparison {
+      name: r.name, verdict: VERDICT_NEW,
+      base_median_ns: 0.0, new_median_ns: r.timing.median,
+      relative: 0.0, sigmas: 0.0, alloc_delta: 0,
+      reason: "no baseline entry; record one with --save",
+    }
+  }
+  let e = b.entries[at]
+  let c = Comparison {
+    name: r.name, verdict: VERDICT_PASS,
+    base_median_ns: e.median_ns, new_median_ns: r.timing.median,
+    relative: 0.0, sigmas: 0.0,
+    alloc_delta: r.memory.allocs - e.allocs,
+    reason: "",
+  }
+  if e.median_ns <= 0.0 or r.timing.n == 0 {
+    c.verdict = VERDICT_INCONCLUSIVE
+    c.reason = "the baseline or the run has no usable median"
+    return c
+  }
+
+  c.relative = (r.timing.median - e.median_ns) / e.median_ns
+
+  # The noisier of the two runs limits what can be concluded from either.
+  let base_sigma = e.iqr_ns / stats.SIGMA_PER_IQR
+  let new_sigma = r.timing.iqr / stats.SIGMA_PER_IQR
+  let sigma = base_sigma
+  if new_sigma > sigma {
+    sigma = new_sigma
+  }
+  let shift = r.timing.median - e.median_ns
+  if shift < 0.0 {
+    c.sigmas = -shift
+  } else {
+    c.sigmas = shift
+  }
+  if sigma > 0.0 {
+    c.sigmas = c.sigmas / sigma
+  } else {
+    # A zero spread on both sides means every sample landed on the same value,
+    # which at this resolution means the clock is too coarse to see the work
+    # rather than that the work is perfectly stable.
+    c.sigmas = 0.0
+    c.verdict = VERDICT_INCONCLUSIVE
+    c.reason = "both runs have zero spread; the clock cannot resolve this benchmark"
+    return c
+  }
+
+  if len(r.warning) > 0 {
+    c.verdict = VERDICT_INCONCLUSIVE
+    c.reason = r.warning
+    return c
+  }
+  if stats.relative_iqr(r.timing) > th.max_relative_iqr {
+    c.verdict = VERDICT_INCONCLUSIVE
+    c.reason = "the run's interquartile range is "
+      + clk.fixed(stats.relative_iqr(r.timing) * 100.0, 1) + "% of its median"
+    return c
+  }
+
+  let big_enough = c.relative >= th.min_relative or c.relative <= -th.min_relative
+  let clear_of_noise = c.sigmas >= th.sigmas
+  if not big_enough or not clear_of_noise {
+    c.verdict = VERDICT_PASS
+    c.reason = "within " + clk.fixed(th.min_relative * 100.0, 0) + "% and "
+      + clk.fixed(th.sigmas, 0) + " sigmas of the baseline"
+    return c
+  }
+  if c.relative > 0.0 {
+    c.verdict = VERDICT_REGRESSED
+    c.reason = clk.fixed(c.relative * 100.0, 1) + "% slower, "
+      + clk.fixed(c.sigmas, 1) + " sigmas"
+    return c
+  }
+  # Improvements are reported, not passed over. An unexplained improvement is
+  # as likely to be a benchmark that stopped doing the work as an optimisation,
+  # and it is the cheapest moment to notice.
+  c.verdict = VERDICT_IMPROVED
+  c.reason = clk.fixed(-c.relative * 100.0, 1) + "% faster, "
+    + clk.fixed(c.sigmas, 1) + " sigmas"
+  c
+}
+
+# Baseline entries with no matching result. A benchmark that disappeared is
+# worth a line: it is usually a rename, and a rename silently resets the
+# history of the thing that was renamed.
+fn missing(b: Baseline, results: Arr[bench.Result]) -> Arr[Str] {
+  let out: Arr[Str] = []
+  let i = 0
+  while i < len(b.entries) {
+    let name = b.entries[i].name
+    let found = false
+    let j = 0
+    while j < len(results) {
+      if results[j].name == name {
+        found = true
+      }
+      j = j + 1
+    }
+    if not found {
+      push(out, name)
+    }
+    i = i + 1
+  }
+  out
+}
+
+# True when any comparison should fail a CI job. Inconclusive does not fail:
+# a noisy runner is not a regression, and failing on it teaches people to
+# rerun until it passes, which defeats the gate for real regressions too.
+fn any_regression(cs: Arr[Comparison]) -> Bool {
+  let i = 0
+  while i < len(cs) {
+    if cs[i].verdict == VERDICT_REGRESSED {
+      return true
+    }
+    i = i + 1
+  }
+  false
+}

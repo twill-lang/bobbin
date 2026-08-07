@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# bobbin cannot be run yet: it is written in twill's systems subset, which is
+# still being implemented. So CI gates on what is checkable today and says
+# plainly that it is not checking behaviour. When `mode systems` lands, the gate
+# becomes `twill run tests/*.tw` and these checks stay.
+#
+# The forbidden strings are assembled at runtime rather than written out, so
+# that this workflow does not fail its own checks.
+jobs:
+  source-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every source file is twill
+        run: |
+          stray=$(find . -path ./.git -prune -o -type f \
+            ! -name '*.tw' ! -name '*.md' ! -name '*.yml' ! -name '*.toml' \
+            ! -name 'LICENSE' ! -name '.gitignore' -print)
+          if [ -n "$stray" ]; then
+            echo "bobbin is written in twill; these files are neither .tw nor documentation:"
+            echo "$stray"
+            exit 1
+          fi
+
+      - name: No reference to the old language name
+        run: |
+          old=$(printf 'ras'; printf 'ter')
+          if grep -rni "$old" --include='*.tw' --include='*.md' --include='*.toml' .; then
+            echo "the language is twill"
+            exit 1
+          fi
+
+      - name: No file carries the old source extension
+        run: |
+          old=$(printf '*.r'; printf 'a')
+          if find . -name "$old" | grep .; then
+            echo "twill source is .tw"
+            exit 1
+          fi
+          if grep -rn "$(printf '\\.r'; printf 'a\\b')" --include='*.tw' --include='*.md' .; then
+            echo "twill source is .tw"
+            exit 1
+          fi
+
+      - name: No em dashes
+        run: |
+          dash=$(printf '\xe2\x80\x94')
+          if grep -rn "$dash" --include='*.tw' --include='*.md' --include='*.toml' .; then
+            echo "em dashes are not used in this repository"
+            exit 1
+          fi
+
+      - name: Every twill source declares its mode
+        run: |
+          for f in $(find . -name '*.tw'); do
+            if [ "$(head -n 1 "$f")" != "mode systems" ]; then
+              echo "$f does not start with 'mode systems'"
+              exit 1
+            fi
+          done
+
+      - name: The README does not claim bobbin works
+        run: |
+          grep -q 'bobbin does not run yet' README.md || {
+            echo "README.md must state that bobbin does not run yet"
+            exit 1
+          }
+
+      - name: Every needs entry names a file
+        run: |
+          # A needs entry without a file to look at is a wish, not a work item.
+          missing=$(grep -c '^### ' docs/needs.md)
+          named=$(grep -c '^\*\*\(Used by\|Would improve\|Needs\)' docs/needs.md)
+          if [ "$named" -lt "$missing" ]; then
+            echo "docs/needs.md has $missing entries and only $named name a file"
+            exit 1
+          fi

@@ -1,0 +1,167 @@
+mode systems
+
+# stats.tw: order statistics, because timings are not normally distributed.
+#
+# The reason this file exists instead of a mean and a standard deviation:
+#
+# A timing distribution has a hard floor and no ceiling. There is a fastest the
+# work can possibly be done, and every source of interference (a scheduler
+# preemption, a page fault, a cache eviction by another process, a frequency
+# step, a garbage collection) can only make a sample slower. So the distribution
+# is right-skewed with a long tail, always, on every machine.
+#
+# On that shape a mean sits above the mode and moves with the tail rather than
+# with the work. One preemption in a hundred runs adds a sample twenty times the
+# median and shifts the mean by twenty percent, and the tool reports a twenty
+# percent regression in code nobody changed. Worse, the standard deviation is
+# even more tail-sensitive than the mean, because it squares the deviations, so
+# the "mean plus or minus sigma" interval that is supposed to tell you whether
+# the change is real is widened by the same outlier that caused the change.
+# Mean and sigma describe a symmetric distribution and this one is not.
+#
+# The median is the sample whose position does not move when a tail sample gets
+# worse, and the interquartile range measures the spread of the middle half,
+# where the work is. Together they answer "how long does this usually take" and
+# "how consistent is it", which is what a benchmark is asked. bobbin therefore
+# reports median and IQR everywhere, and reports the minimum alongside them
+# because the minimum is the closest observable thing to the interference-free
+# cost.
+#
+# The mean is still computed, and reported last, because the *total* time of a
+# batch job is a function of the mean and not of the median. It is a different
+# question and it is labelled as one.
+
+# An insertion sort over I64 samples. Sample counts are in the hundreds and the
+# comparison is fixed, so this is small and obvious rather than fast; see
+# docs/needs.md entry 5 for the generic sort that would replace it.
+fn sorted(xs: Arr[I64]) -> Arr[I64] {
+  let out: Arr[I64] = []
+  let i = 0
+  while i < len(xs) {
+    push(out, xs[i])
+    let j = len(out) - 1
+    while j > 0 and out[j - 1] > out[j] {
+      let tmp = out[j - 1]
+      out[j - 1] = out[j]
+      out[j] = tmp
+      j = j - 1
+    }
+    i = i + 1
+  }
+  out
+}
+
+# A quantile of an already sorted sample, by linear interpolation between the
+# two neighbouring order statistics. Interpolating rather than picking the
+# nearest rank matters at small n: with 11 samples the nearest-rank first
+# quartile is sample 3 for any q between 0.23 and 0.32, so the IQR jumps in
+# steps as samples are added and a threshold built on it moves for no reason.
+#
+# `xs` must be sorted. It is not checked, because every caller in this file
+# sorts once and takes several quantiles, and sorting inside would be the more
+# expensive of the two mistakes.
+fn quantile_sorted(xs: Arr[I64], q: F64) -> F64 {
+  let n = len(xs)
+  if n == 0 {
+    return 0.0
+  }
+  if n == 1 {
+    return f64(xs[0])
+  }
+  let pos = q * f64(n - 1)
+  let lo = i64(pos)
+  if lo >= n - 1 {
+    return f64(xs[n - 1])
+  }
+  let frac = pos - f64(lo)
+  f64(xs[lo]) + (f64(xs[lo + 1]) - f64(xs[lo])) * frac
+}
+
+fn median_sorted(xs: Arr[I64]) -> F64 = quantile_sorted(xs, 0.5)
+
+struct Summary {
+  n: I64,
+  min: I64,
+  max: I64,
+  q1: F64,
+  median: F64,
+  q3: F64,
+  iqr: F64,
+  # Reported last and labelled, because it answers a different question: total
+  # wall time for n runs is n times the mean, never n times the median.
+  mean: F64,
+  # A robust scale estimate. For a normal distribution IQR/1.349 equals the
+  # standard deviation, which is what makes it a drop-in replacement in a
+  # threshold that would otherwise be written in sigmas. It does not blow up
+  # when one sample is twenty times the rest.
+  robust_sigma: F64,
+  # Samples above q3 + 1.5*IQR. Counted and reported rather than removed:
+  # discarding them would hide interference that is real and would make a
+  # noisy machine look like a quiet one.
+  outliers: I64,
+}
+
+let SIGMA_PER_IQR = 1.349
+
+fn summarize(raw: Arr[I64]) -> Summary {
+  let xs = sorted(raw)
+  let n = len(xs)
+  if n == 0 {
+    return Summary { n: 0, min: 0, max: 0, q1: 0.0, median: 0.0, q3: 0.0,
+                     iqr: 0.0, mean: 0.0, robust_sigma: 0.0, outliers: 0 }
+  }
+  let q1 = quantile_sorted(xs, 0.25)
+  let med = quantile_sorted(xs, 0.5)
+  let q3 = quantile_sorted(xs, 0.75)
+  let iqr = q3 - q1
+  let total = 0.0
+  let i = 0
+  while i < n {
+    total = total + f64(xs[i])
+    i = i + 1
+  }
+  let fence = q3 + 1.5 * iqr
+  let outliers = 0
+  let j = 0
+  while j < n {
+    if f64(xs[j]) > fence {
+      outliers = outliers + 1
+    }
+    j = j + 1
+  }
+  Summary {
+    n: n,
+    min: xs[0],
+    max: xs[n - 1],
+    q1: q1,
+    median: med,
+    q3: q3,
+    iqr: iqr,
+    mean: total / f64(n),
+    robust_sigma: iqr / SIGMA_PER_IQR,
+    outliers: outliers,
+  }
+}
+
+# The relative spread of the middle half, as a fraction of the median. This is
+# the number that says whether a measurement is worth trusting: above about
+# 0.05 the machine is too noisy for a five percent regression threshold to mean
+# anything, and bobbin says so rather than reporting a verdict it cannot
+# support.
+fn relative_iqr(s: Summary) -> F64 {
+  if s.median == 0.0 {
+    return 0.0
+  }
+  s.iqr / s.median
+}
+
+# How much slower the median is than the fastest sample seen. A large value
+# means most runs are paying for interference rather than for work, which is a
+# different problem from a noisy tail and wants a different response: pin the
+# CPU, close the browser, stop the build.
+fn median_over_min(s: Summary) -> F64 {
+  if s.min == 0 {
+    return 0.0
+  }
+  s.median / f64(s.min)
+}

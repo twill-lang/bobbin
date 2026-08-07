@@ -1,0 +1,105 @@
+mode systems
+
+import "harness.tw" as t
+import "../src/stats.tw" as stats
+
+fn sorting_orders_a_sample_without_losing_one() {
+  let s = stats.sorted([5, 1, 4, 1, 3])
+  t.equal_i64("length is preserved", len(s), 5)
+  t.equal_i64("smallest first", s[0], 1)
+  t.equal_i64("duplicates survive", s[1], 1)
+  t.equal_i64("largest last", s[4], 5)
+}
+
+fn sorting_an_empty_sample_is_empty() {
+  t.equal_i64("nothing in, nothing out", len(stats.sorted([])), 0)
+}
+
+fn a_quantile_interpolates_between_neighbours() {
+  # Four samples: the first quartile sits at position 0.25*(4-1) = 0.75, which
+  # is three quarters of the way from 10 to 20.
+  let xs = stats.sorted([10, 20, 30, 40])
+  t.near("q1 interpolates", stats.quantile_sorted(xs, 0.25), 17.5, 0.000000001)
+  t.near("the median interpolates", stats.quantile_sorted(xs, 0.5), 25.0, 0.000000001)
+  t.near("q3 interpolates", stats.quantile_sorted(xs, 0.75), 32.5, 0.000000001)
+}
+
+fn a_quantile_at_the_ends_is_the_end() {
+  let xs = stats.sorted([10, 20, 30])
+  t.near("q0 is the minimum", stats.quantile_sorted(xs, 0.0), 10.0, 0.0)
+  t.near("q1.0 is the maximum", stats.quantile_sorted(xs, 1.0), 30.0, 0.0)
+}
+
+fn a_single_sample_is_its_own_every_quantile() {
+  let xs = stats.sorted([42])
+  t.near("median of one", stats.quantile_sorted(xs, 0.5), 42.0, 0.0)
+  t.near("q1 of one", stats.quantile_sorted(xs, 0.25), 42.0, 0.0)
+}
+
+fn an_odd_count_takes_the_middle_sample() {
+  t.near("median of five", stats.median_sorted(stats.sorted([1, 2, 3, 4, 5])), 3.0, 0.0)
+}
+
+# The test that justifies the whole file. Nine clean samples and one
+# catastrophic outlier, which is what one scheduler preemption in a hundred
+# looks like.
+fn one_wild_sample_moves_the_mean_and_not_the_median() {
+  let clean: Arr[I64] = [100, 101, 99, 100, 102, 98, 101, 100, 99, 100]
+  let spiked: Arr[I64] = [100, 101, 99, 100, 102, 98, 101, 100, 99, 2000]
+  let a = stats.summarize(clean)
+  let b = stats.summarize(spiked)
+  t.near("the median barely moves", b.median - a.median, 0.0, 1.0)
+  t.check("the mean moves a great deal", b.mean - a.mean > 150.0)
+  t.check("the interquartile range barely moves", b.iqr - a.iqr < 2.0)
+}
+
+fn an_outlier_is_counted_and_not_removed() {
+  let b = stats.summarize([100, 101, 99, 100, 102, 98, 101, 100, 99, 2000])
+  t.equal_i64("every sample is still there", b.n, 10)
+  t.equal_i64("and the outlier is counted", b.outliers, 1)
+  t.equal_i64("the maximum still shows it", b.max, 2000)
+}
+
+fn a_summary_of_nothing_is_zero_rather_than_a_division_by_zero() {
+  let s = stats.summarize([])
+  t.equal_i64("no samples", s.n, 0)
+  t.near("no median", s.median, 0.0, 0.0)
+  t.near("no relative iqr", stats.relative_iqr(s), 0.0, 0.0)
+}
+
+fn the_robust_sigma_matches_the_standard_deviation_on_clean_data() {
+  # Eleven samples spread evenly. IQR/1.349 should land near the sample
+  # standard deviation, which is what makes it usable in a threshold written
+  # in sigmas.
+  let s = stats.summarize([90, 92, 94, 96, 98, 100, 102, 104, 106, 108, 110])
+  t.near("iqr spans the middle half", s.iqr, 10.0, 0.000001)
+  t.near("robust sigma is the iqr over 1.349", s.robust_sigma, 7.412898443291327, 0.0001)
+}
+
+fn a_relative_iqr_says_how_trustworthy_the_median_is() {
+  let tight = stats.summarize([100, 100, 100, 101, 100, 99, 100, 100, 100, 100])
+  let loose = stats.summarize([50, 150, 60, 140, 70, 130, 80, 120, 90, 110])
+  t.check("a tight sample has a small relative iqr", stats.relative_iqr(tight) < 0.05)
+  t.check("a loose sample has a large one", stats.relative_iqr(loose) > 0.3)
+}
+
+fn the_gap_between_the_median_and_the_minimum_shows_interference() {
+  let quiet = stats.summarize([100, 100, 101, 100, 99, 100])
+  let busy = stats.summarize([100, 200, 210, 190, 205, 195])
+  t.check("a quiet machine sits near its minimum", stats.median_over_min(quiet) < 1.1)
+  t.check("a busy one does not", stats.median_over_min(busy) > 1.8)
+}
+
+sorting_orders_a_sample_without_losing_one()
+sorting_an_empty_sample_is_empty()
+a_quantile_interpolates_between_neighbours()
+a_quantile_at_the_ends_is_the_end()
+a_single_sample_is_its_own_every_quantile()
+an_odd_count_takes_the_middle_sample()
+one_wild_sample_moves_the_mean_and_not_the_median()
+an_outlier_is_counted_and_not_removed()
+a_summary_of_nothing_is_zero_rather_than_a_division_by_zero()
+the_robust_sigma_matches_the_standard_deviation_on_clean_data()
+a_relative_iqr_says_how_trustworthy_the_median_is()
+the_gap_between_the_median_and_the_minimum_shows_interference()
+t.report("stats")

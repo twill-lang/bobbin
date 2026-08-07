@@ -1,0 +1,81 @@
+mode systems
+
+# Benchmarking a handful of tensor operations, end to end.
+#
+# Run it from the project root, because import paths resolve relative to the
+# working directory and that is twill's rule rather than bobbin's:
+#
+#   twill run examples/tensor_ops.tw
+#
+# It does not run. See the README.
+
+import "../src/suite.tw" as suite
+import "../src/harness.tw" as bench
+import "../src/baseline.tw" as base
+import "../src/report.tw" as rep
+
+let N = 128
+
+# Inputs are built once, outside the timed body. A benchmark that allocates its
+# input inside the loop measures the allocator, and the allocator is usually
+# not the thing under test.
+let A = randn(N, N)
+let B = randn(N, N)
+let V = randn(N)
+
+# Every body returns a value, and the harness feeds it to `keep`. Returning
+# nothing would make the work removable the day twill has an optimiser that can
+# remove it.
+fn bench_matmul(i: I64) -> F64 = item(sum(A @ B))
+fn bench_matvec(i: I64) -> F64 = item(sum(A @ V))
+fn bench_softmax(i: I64) -> F64 = item(sum(softmax(A, 1)))
+fn bench_sort(i: I64) -> F64 = item(sum(sort(V)))
+fn bench_grad(i: I64) -> F64 = item(sum(grad(fn(x) = sum(x * x))(V)))
+
+fn main() {
+  let s = suite.suite("tensor ops, " + str(N) + "x" + str(N))
+
+  # matmul at this size takes milliseconds, so one iteration per sample is
+  # plenty and batching would only make each sample slower to collect.
+  suite.add(s, "matmul", bench_matmul)
+  suite.add(s, "matvec", bench_matvec)
+  suite.add(s, "softmax", bench_softmax)
+
+  # sort and the gradient are fast enough that the clock is a real fraction of
+  # them, so they are batched until a sample lasts about a millisecond.
+  let batched = bench.defaults()
+  batched.inner = bench.auto_inner(bench_sort)
+  suite.add_with(s, "sort", batched, bench_sort)
+
+  let batched_grad = bench.defaults()
+  batched_grad.inner = bench.auto_inner(bench_grad)
+  suite.add_with(s, "grad", batched_grad, bench_grad)
+
+  let bad = suite.validate(s)
+  if len(bad) > 0 {
+    print("bobbin: " + bad)
+    exit(1)
+  }
+
+  let results = suite.run_all(s)
+  suite.print_human(s, results)
+
+  # The machine-readable document is a separate one, not the same table with
+  # the punctuation removed.
+  print("")
+  suite.print_json(results)
+
+  # Compare against the stored baseline. In a real runner this is read from
+  # bobbin.baseline; there is no file reader yet, so the comparison here is
+  # against an empty baseline and every benchmark reports as new.
+  let stored = base.new_baseline()
+  let cs = suite.compare_all(results, stored, base.default_thresholds())
+  print("")
+  suite.print_comparisons(cs, stored, results)
+
+  if suite.gate(cs) {
+    exit(1)
+  }
+}
+
+main()

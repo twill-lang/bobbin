@@ -1,0 +1,8 @@
+# Written by spool. Reproduced from spool.toml and spool.lock, so it is not
+# source and does not belong in a commit.
+twill_modules/
+.spool/
+
+# Benchmark output. The baseline itself is committed; a run's output is not.
+*.jsonl
+bobbin-run-*.txt
