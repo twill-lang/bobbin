@@ -1,0 +1,368 @@
+mode systems
+
+# ml.tw: the fixed ML workload suite.
+#
+# The twill ecosystem wants to be able to say that twill is efficient for ML
+# work. A claim like that is worth nothing unless the suite behind it would
+# show it false if it were false, so this file is arranged to be that suite:
+# eight workloads, fixed shapes, fixed seeds, and a dtype axis of f64, f32 and
+# bf16, so a run measures exactly what the dtype work in the twill repository's
+# docs/dtypes.md buys and nothing else.
+#
+# Three rules, enforced by construction rather than by review:
+#
+# 1. Nothing here is tunable. The shapes and the seeds are constants in this
+#    file, and changing one is a visible diff to the one file every past number
+#    was measured against. A suite with a knob grows a configuration that makes
+#    the new code look good.
+#
+# 2. Every dtype point is the same math on the same values. The f64 tensors are
+#    the generated draws; the f32 and bf16 sets are those draws cast once,
+#    which under docs/dtypes.md rounds once from the source value. Nothing is
+#    regenerated per dtype, and every constant in the workload math is exactly
+#    representable in bf16, so the three points differ in dtype and in nothing
+#    else.
+#
+# 3. The suite runs unchanged on the Go bootstrap today and on the self-hosted
+#    runtime later. A regression across that transition is precisely what the
+#    suite exists to catch, and a suite edited at the transition cannot catch
+#    it.
+#
+# How the same workloads are defined in PyTorch and NumPy, what is measured,
+# and the honesty rules for comparing any of it, are in docs/ml-workloads.md.
+# Read that before quoting a number from here.
+#
+# It does not run. See the README, and docs/needs.md entries 14 to 16 for the
+# walls this file hit.
+
+import "../src/suite.tw" as suite
+import "../src/harness.tw" as bench
+import "../src/baseline.tw" as base
+import "std/optim" as optim
+
+# ---- inputs ---------------------------------------------------------------
+#
+# Inputs are built once, outside every timed body. A benchmark that allocates
+# its input inside the loop measures the allocator, and the allocator is not
+# the thing under test.
+#
+# Each workload draws under its own seed, so adding or removing one workload
+# cannot shift the data of another, and the seed is part of the workload's
+# definition rather than of the run.
+#
+# Two cast helpers instead of one `cast(tree, dt)`, because a dtype is a name
+# only in the dtype argument of a constructor or of `.to`, and cannot yet be
+# passed as a value. See docs/needs.md entry 14.
+
+fn to32(tree) = map_leaves(fn(t) = t.to(f32), tree)
+fn tob16(tree) = map_leaves(fn(t) = t.to(bf16), tree)
+
+# mlp: batch 32, 784 in, 256 hidden, 10 out. The classic small classifier, and
+# the smallest shape whose matmuls are large enough to mean anything. Weights
+# are stored input-major so the batch multiplies without a transpose.
+seed(101)
+let MLP_IO_64 = {
+  X: randn(32, 784),
+  T: randn(32, 10),
+}
+let MLP_W_64 = {
+  W1: randn(784, 256) * 0.05,
+  B1: zeros(256),
+  W2: randn(256, 10) * 0.05,
+  B2: zeros(10),
+}
+let MLP_IO_32 = to32(MLP_IO_64)
+let MLP_W_32 = to32(MLP_W_64)
+let MLP_IO_B16 = tob16(MLP_IO_64)
+let MLP_W_B16 = tob16(MLP_W_64)
+
+# conv2d: one example, 16 channels of 64x64, 32 filters of 3x3, valid padding,
+# unit stride, matching the conv2d builtin exactly. The output is [32, 62, 62].
+seed(102)
+let CONV_64 = {
+  X: randn(16, 64, 64),
+  W: randn(32, 16, 3, 3) * 0.1,
+}
+let CONV_32 = to32(CONV_64)
+let CONV_B16 = tob16(CONV_64)
+
+# attention: one head, sequence 128, dimension 64. 0.125 is 1/sqrt(64), the
+# usual initialiser scale for this width, and exact in bf16.
+seed(103)
+let ATT_64 = {
+  X: randn(128, 64),
+  Wq: randn(64, 64) * 0.125,
+  Wk: randn(64, 64) * 0.125,
+  Wv: randn(64, 64) * 0.125,
+}
+let ATT_32 = to32(ATT_64)
+let ATT_B16 = tob16(ATT_64)
+
+# softmax + cross-entropy: 64 rows of 1000 logits, one-hot targets. The labels
+# are the argmax of an independent draw, so they are deterministic under the
+# seed and uncorrelated with the logits being scored.
+seed(104)
+let XENT_64 = {
+  L: randn(64, 1000),
+  T: gather(eye(1000), argmax(randn(64, 1000), 1)),
+}
+let XENT_32 = to32(XENT_64)
+let XENT_B16 = tob16(XENT_64)
+
+# optimiser step: one Adam update over the mlp's parameter tree, 203,530
+# parameters. The gradients are a fixed draw at gradient scale, and the moment
+# trees start at zero, exactly as they do at the start of training.
+seed(105)
+let ADAM_P_64 = {
+  W1: randn(784, 256) * 0.05,
+  B1: zeros(256),
+  W2: randn(256, 10) * 0.05,
+  B2: zeros(10),
+}
+let ADAM_G_64 = {
+  W1: randn(784, 256) * 0.01,
+  B1: randn(256) * 0.01,
+  W2: randn(256, 10) * 0.01,
+  B2: randn(10) * 0.01,
+}
+let ADAM_M_64 = optim.zeros_like(ADAM_P_64)
+let ADAM_V_64 = optim.zeros_like(ADAM_P_64)
+let ADAM_P_32 = to32(ADAM_P_64)
+let ADAM_G_32 = to32(ADAM_G_64)
+let ADAM_M_32 = to32(ADAM_M_64)
+let ADAM_V_32 = to32(ADAM_V_64)
+let ADAM_P_B16 = tob16(ADAM_P_64)
+let ADAM_G_B16 = tob16(ADAM_G_64)
+let ADAM_M_B16 = tob16(ADAM_M_64)
+let ADAM_V_B16 = tob16(ADAM_V_64)
+
+# elementwise chain: one vector of 2^24 elements. At f64 that is 128 MiB per
+# array, far beyond any cache on any current machine, and still beyond every
+# cache at bf16 once the packed layout lands. This is the workload where the
+# dtype axis is a bandwidth axis and nothing else.
+seed(106)
+let CHAIN_64 = { X: randn(16777216) }
+let CHAIN_32 = to32(CHAIN_64)
+let CHAIN_B16 = tob16(CHAIN_64)
+
+# ---- the workloads --------------------------------------------------------
+#
+# Each is a plain function of a record of tensors, so the three dtype points
+# share one definition of the math and cannot drift apart. The math is
+# restated, with its PyTorch and NumPy reference listings, in
+# docs/ml-workloads.md; where the two disagree, this file governs and the doc
+# has a bug.
+
+fn mlp_fwd(w, x) = relu(x @ w.W1 + w.B1) @ w.W2 + w.B2
+
+# Mean squared error rather than cross-entropy, so the mlp workload and the
+# softmax_xent workload do not overlap: this one is two matmuls and a relu,
+# that one is the exp-and-log-heavy loss, and a regression in either should
+# name the right one.
+fn mlp_loss(w, io) = mean(square(mlp_fwd(w, io.X) - io.T))
+
+fn mlp_grads(w, io) = grad(fn(v) = mlp_loss(v, io))(w)
+
+fn conv_fwd(p) = conv2d(p.X, p.W)
+
+# Differentiated with respect to both the input and the weight, because a conv
+# layer anywhere but first computes both, and the input gradient is the more
+# expensive half.
+fn conv_loss(p) = sum(conv_fwd(p))
+
+fn conv_grads(p) = grad(conv_loss)(p)
+
+# The same math as std/nn's self_attention, restated so the suite pins its own
+# definition: scores scaled by 1/sqrt(dim), softmax over rows, applied to the
+# projected values. 8.0 is sqrt(64), the fixed head dimension above.
+fn attention_fwd(p) {
+  let q = p.X @ p.Wq
+  let k = p.X @ p.Wk
+  let v = p.X @ p.Wv
+  softmax((q @ transpose(k)) / 8.0, 1) @ v
+}
+
+# The same math as std/loss's cross_entropy_batch: the logsumexp form, which
+# never materialises a probability of zero, reduced over classes and averaged
+# over the batch.
+fn softmax_xent(p) = mean(logsumexp(p.L, 1) - sum(p.L * p.T, 1))
+
+# Eight elementwise operations and a final reduction over 2^24 elements. The
+# constants 1.25, 0.25 and 0.125 are exact in bf16, so the three dtype points
+# run the same arithmetic and not three roundings of the constants. The input
+# is read three times on purpose: a sufficiently clever fuser can collapse a
+# straight chain into one pass, and the reuse keeps the traffic honest.
+fn chain(p) = sum(sqrt(abs(relu(p.X * 1.25 + 0.25) * p.X - 0.125)) + p.X)
+
+# ---- benchmark bodies -----------------------------------------------------
+#
+# One body per workload per dtype point, each a one-liner over the inputs
+# above: twenty-four functions where a language whose dtype was a value would
+# need eight. See docs/needs.md entry 14.
+#
+# Every body returns a value derived from its full result, and the harness
+# feeds it to `keep`, so the work is not removable the day twill has an
+# optimiser that could remove it. The fwdbwd bodies fold in every gradient
+# leaf, because a backward pass whose dW2 was dropped is a backward pass an
+# optimiser may skip.
+
+fn bench_mlp_fwd_f64(i: I64) -> F64 = item(sum(mlp_fwd(MLP_W_64, MLP_IO_64.X)))
+fn bench_mlp_fwd_f32(i: I64) -> F64 = item(sum(mlp_fwd(MLP_W_32, MLP_IO_32.X)))
+fn bench_mlp_fwd_bf16(i: I64) -> F64 = item(sum(mlp_fwd(MLP_W_B16, MLP_IO_B16.X)))
+
+fn bench_mlp_fwdbwd_f64(i: I64) -> F64 {
+  let g = mlp_grads(MLP_W_64, MLP_IO_64)
+  item(sum(g.W1) + sum(g.B1) + sum(g.W2) + sum(g.B2))
+}
+fn bench_mlp_fwdbwd_f32(i: I64) -> F64 {
+  let g = mlp_grads(MLP_W_32, MLP_IO_32)
+  item(sum(g.W1) + sum(g.B1) + sum(g.W2) + sum(g.B2))
+}
+fn bench_mlp_fwdbwd_bf16(i: I64) -> F64 {
+  let g = mlp_grads(MLP_W_B16, MLP_IO_B16)
+  item(sum(g.W1) + sum(g.B1) + sum(g.W2) + sum(g.B2))
+}
+
+fn bench_conv_fwd_f64(i: I64) -> F64 = item(sum(conv_fwd(CONV_64)))
+fn bench_conv_fwd_f32(i: I64) -> F64 = item(sum(conv_fwd(CONV_32)))
+fn bench_conv_fwd_bf16(i: I64) -> F64 = item(sum(conv_fwd(CONV_B16)))
+
+fn bench_conv_fwdbwd_f64(i: I64) -> F64 {
+  let g = conv_grads(CONV_64)
+  item(sum(g.X) + sum(g.W))
+}
+fn bench_conv_fwdbwd_f32(i: I64) -> F64 {
+  let g = conv_grads(CONV_32)
+  item(sum(g.X) + sum(g.W))
+}
+fn bench_conv_fwdbwd_bf16(i: I64) -> F64 {
+  let g = conv_grads(CONV_B16)
+  item(sum(g.X) + sum(g.W))
+}
+
+fn bench_attention_f64(i: I64) -> F64 = item(sum(attention_fwd(ATT_64)))
+fn bench_attention_f32(i: I64) -> F64 = item(sum(attention_fwd(ATT_32)))
+fn bench_attention_bf16(i: I64) -> F64 = item(sum(attention_fwd(ATT_B16)))
+
+fn bench_xent_f64(i: I64) -> F64 = item(softmax_xent(XENT_64))
+fn bench_xent_f32(i: I64) -> F64 = item(softmax_xent(XENT_32))
+fn bench_xent_bf16(i: I64) -> F64 = item(softmax_xent(XENT_B16))
+
+# t is 10, a mid-run step count, so the bias corrections are neither the
+# degenerate first step nor washed out to one. The learning rate and betas are
+# Adam's defaults; eps is 1e-8 written out because the suite avoids exponent
+# literals it has not seen the language define. One leaf of each of the three
+# returned trees is folded in, so neither the parameter update nor either
+# moment update is removable.
+fn adam_once(p, g, m, v) -> F64 {
+  let r = optim.adam_step(p, g, m, v, 10, 0.001, 0.9, 0.999, 0.00000001)
+  item(sum(r[0].W2) + sum(r[1].B2) + sum(r[2].B1))
+}
+
+fn bench_adam_f64(i: I64) -> F64 = adam_once(ADAM_P_64, ADAM_G_64, ADAM_M_64, ADAM_V_64)
+fn bench_adam_f32(i: I64) -> F64 = adam_once(ADAM_P_32, ADAM_G_32, ADAM_M_32, ADAM_V_32)
+fn bench_adam_bf16(i: I64) -> F64 = adam_once(ADAM_P_B16, ADAM_G_B16, ADAM_M_B16, ADAM_V_B16)
+
+fn bench_chain_f64(i: I64) -> F64 = item(chain(CHAIN_64))
+fn bench_chain_f32(i: I64) -> F64 = item(chain(CHAIN_32))
+fn bench_chain_bf16(i: I64) -> F64 = item(chain(CHAIN_B16))
+
+# ---- the suite ------------------------------------------------------------
+
+fn main() {
+  let s = suite.suite("ml workloads")
+
+  # Registration order is cheap first, and the three dtype points of one
+  # workload stay adjacent, because the run prints in registration order and
+  # the three points are read together or not at all.
+
+  # softmax_xent, attention, adam and the mlp forward pass are small enough
+  # that one call may be a real fraction of a millisecond, so they are batched
+  # by measurement rather than by guess.
+  let xent64 = bench.defaults()
+  xent64.inner = bench.auto_inner(bench_xent_f64)
+  suite.add_with(s, "softmax_xent/f64", xent64, bench_xent_f64)
+  let xent32 = bench.defaults()
+  xent32.inner = bench.auto_inner(bench_xent_f32)
+  suite.add_with(s, "softmax_xent/f32", xent32, bench_xent_f32)
+  let xentb = bench.defaults()
+  xentb.inner = bench.auto_inner(bench_xent_bf16)
+  suite.add_with(s, "softmax_xent/bf16", xentb, bench_xent_bf16)
+
+  let att64 = bench.defaults()
+  att64.inner = bench.auto_inner(bench_attention_f64)
+  suite.add_with(s, "attention_fwd/f64", att64, bench_attention_f64)
+  let att32 = bench.defaults()
+  att32.inner = bench.auto_inner(bench_attention_f32)
+  suite.add_with(s, "attention_fwd/f32", att32, bench_attention_f32)
+  let attb = bench.defaults()
+  attb.inner = bench.auto_inner(bench_attention_bf16)
+  suite.add_with(s, "attention_fwd/bf16", attb, bench_attention_bf16)
+
+  let adam64 = bench.defaults()
+  adam64.inner = bench.auto_inner(bench_adam_f64)
+  suite.add_with(s, "adam_step/f64", adam64, bench_adam_f64)
+  let adam32 = bench.defaults()
+  adam32.inner = bench.auto_inner(bench_adam_f32)
+  suite.add_with(s, "adam_step/f32", adam32, bench_adam_f32)
+  let adamb = bench.defaults()
+  adamb.inner = bench.auto_inner(bench_adam_bf16)
+  suite.add_with(s, "adam_step/bf16", adamb, bench_adam_bf16)
+
+  let mlp64 = bench.defaults()
+  mlp64.inner = bench.auto_inner(bench_mlp_fwd_f64)
+  suite.add_with(s, "mlp_fwd/f64", mlp64, bench_mlp_fwd_f64)
+  let mlp32 = bench.defaults()
+  mlp32.inner = bench.auto_inner(bench_mlp_fwd_f32)
+  suite.add_with(s, "mlp_fwd/f32", mlp32, bench_mlp_fwd_f32)
+  let mlpb = bench.defaults()
+  mlpb.inner = bench.auto_inner(bench_mlp_fwd_bf16)
+  suite.add_with(s, "mlp_fwd/bf16", mlpb, bench_mlp_fwd_bf16)
+
+  # The fwdbwd pairs and the chain take milliseconds each by any estimate: the
+  # backward passes build and walk a graph, and the chain moves gigabytes. One
+  # call per sample, which is what the defaults do.
+  suite.add(s, "mlp_fwdbwd/f64", bench_mlp_fwdbwd_f64)
+  suite.add(s, "mlp_fwdbwd/f32", bench_mlp_fwdbwd_f32)
+  suite.add(s, "mlp_fwdbwd/bf16", bench_mlp_fwdbwd_bf16)
+
+  suite.add(s, "conv2d_fwd/f64", bench_conv_fwd_f64)
+  suite.add(s, "conv2d_fwd/f32", bench_conv_fwd_f32)
+  suite.add(s, "conv2d_fwd/bf16", bench_conv_fwd_bf16)
+
+  suite.add(s, "conv2d_fwdbwd/f64", bench_conv_fwdbwd_f64)
+  suite.add(s, "conv2d_fwdbwd/f32", bench_conv_fwdbwd_f32)
+  suite.add(s, "conv2d_fwdbwd/bf16", bench_conv_fwdbwd_bf16)
+
+  suite.add(s, "eltwise_chain/f64", bench_chain_f64)
+  suite.add(s, "eltwise_chain/f32", bench_chain_f32)
+  suite.add(s, "eltwise_chain/bf16", bench_chain_bf16)
+
+  let bad = suite.validate(s)
+  if len(bad) > 0 {
+    print("bobbin: " + bad)
+    exit(1)
+  }
+
+  let results = suite.run_all(s)
+  suite.print_human(s, results)
+
+  # The machine-readable document is a separate one, not the same table with
+  # the punctuation removed.
+  print("")
+  suite.print_json(results)
+
+  # Compare against the stored baseline. In a real runner this is read from
+  # bobbin.baseline; there is no file reader yet, so the comparison here is
+  # against an empty baseline and every benchmark reports as new.
+  let stored = base.new_baseline()
+  let cs = suite.compare_all(results, stored, base.default_thresholds())
+  print("")
+  suite.print_comparisons(cs, stored, results)
+
+  if suite.gate(cs) {
+    exit(1)
+  }
+}
+
+main()

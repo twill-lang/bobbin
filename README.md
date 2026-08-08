@@ -226,6 +226,10 @@ src/report.tw       the human table, the JSON lines, the baseline file
 src/suite.tw        registering and running a set of benchmarks
 tests/              tests, named as sentences, none of which needs a clock
 examples/           a suite over five tensor operations
+suites/ml.tw        the fixed ML workload suite: eight workloads, fixed
+                    shapes and seeds, a dtype axis of f64, f32 and bf16
+docs/ml-workloads.md  the ML suite's methodology: the PyTorch and NumPy
+                    references, what is measured, and the honesty rules
 docs/needs.md       what the language and the runtime still have to provide
 ```
 
