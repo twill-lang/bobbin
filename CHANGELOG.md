@@ -30,6 +30,15 @@ Added:
   matching result named, because a rename resets a benchmark's history.
 - Two outputs: an aligned human table, and line-delimited JSON as a separate
   document rather than the same table with the punctuation removed.
+- The fixed ML workload suite (`suites/ml.tw`): mlp forward and
+  forward-plus-backward, conv2d forward and forward-plus-backward, an
+  attention block forward, softmax plus cross-entropy, an Adam step, and a
+  memory-bandwidth-bound elementwise chain, each at fixed shapes and seeds
+  with a dtype axis of f64, f32 and bf16.
+- The suite's methodology (`docs/ml-workloads.md`): the PyTorch and NumPy
+  reference implementations as listings, the analytic traffic and working-set
+  accounting, the warmup and repetition protocol, and the honesty rules that
+  make a comparison publishable.
 
 Known gaps, deliberate for v0.1:
 

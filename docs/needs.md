@@ -218,3 +218,71 @@ because with enough samples everything is significant. The question a regression
 gate is asked is not "is this difference real" but "is this difference big
 enough to care about", and that is a threshold question, so bobbin uses two
 thresholds and says which one was not met.
+
+## Hit while writing the ML workload suite
+
+`suites/ml.tw` is the fixed ML workload suite and `docs/ml-workloads.md` is
+its methodology. Writing it hit three more walls, found the same way as the
+thirteen above: by writing the real code.
+
+### 14. dtype names, and a dtype a program can pass
+
+**Needs:** NEEDS-110 in the twill repository (`bf16` as a name,
+`zeros(shape, bf16)`, `x.to(dt)`), and one thing more than it asks for: a
+dtype usable in ordinary argument position
+**Used by:** `suites/ml.tw` (`to32`, `tob16`, every input set, every body)
+**Status:** NEEDS-110 is designed and not implemented; the extra ask is not
+designed.
+
+The suite's dtype axis is written in the NEEDS-110 spelling and parses nowhere
+today. That much is expected and fine; the suite is written against the design
+the way the rest of bobbin is written against the clock.
+
+The wall is the part past the design. NEEDS-110 makes the seven dtype names
+contextual: `f32` reads as a dtype only in the dtype argument of a constructor
+or of `.to`, and stays an ordinary identifier everywhere else. So
+`inputs(f32)` is an unbound identifier, a function cannot take the axis as a
+parameter, and the axis cannot be written once. The suite therefore contains
+two cast helpers instead of one, three input records per workload instead of a
+loop, and twenty-four benchmark bodies instead of eight. For one file that is
+verbose and survivable. For the ecosystem's benchmark surface, where every
+suite will want this exact axis, a dtype that is a value, as it is in numpy,
+deletes two thirds of every one of those files.
+
+### 15. packed buffers, before the dtype axis measures anything
+
+**Needs:** NEEDS-111 in the twill repository, the packed byte-addressable
+buffer
+**Used by:** the interpretation of every `/f32` and `/bf16` point in
+`suites/ml.tw`, `eltwise_chain` most of all
+**Status:** open in the twill repository. Not a new request; a dependency
+recorded here so the suite's first run is not misread.
+
+Until the layout lands, a bf16 element occupies 64 bits like everything else,
+all three dtype points move identical bytes, and the narrow points do strictly
+more work because they round on store. The f32 and bf16 columns of the first
+run will come back *slower* than f64, and that is the correct result: it
+measures the cost of dtype semantics, not the value of dtypes. The bandwidth
+question the axis exists for is only answerable after NEEDS-111, and the
+before-and-after pair of baselines across that landing is the measurement of
+what the layout bought. `docs/ml-workloads.md` states the same rule for
+anyone publishing.
+
+### 16. the mode boundary, written down
+
+**Used by:** all of `suites/ml.tw`
+**Status:** unstated on both sides of the boundary.
+
+The suite is `mode systems`, because the harness it drives is. It also stores
+tensors in records, defines untyped functions over them, calls `grad`, and
+imports `std/optim` for the optimiser step. Every one of those is
+numeric-mode surface inside a systems-mode file. `examples/tensor_ops.tw`
+already does the smaller half of this, calling tensor builtins from typed
+systems-mode bodies, so the pattern is load-bearing in two files now and
+nothing anywhere says it is legal.
+
+What is needed is not a feature but a statement: what a systems-mode file may
+do with numeric values, numeric functions and numeric `std/` modules, spelled
+out in the self-hosting design. The alternative reading, that it may do none
+of it, unwrites both files, and the time to learn which reading is true is
+before the first runtime exists rather than the week it appears.
