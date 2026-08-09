@@ -17,14 +17,22 @@ mode systems
 # The mean is printed last and labelled. It answers a different question, and
 # putting it first is what makes people compare means.
 #
-# There is no colour. twill's terminal layer lives in its own repository as
-# files, and only std/ modules are reachable from an installed package, so
-# bobbin cannot call it. See docs/needs.md entry 7.
+# Colour carries meaning, never decoration: a regression is the twill error red,
+# an improvement the mint, an inconclusive result the warm amber, and everything
+# else is left plain. It comes from twill's terminal layer, vendored under
+# twill_modules the same way weft reaches it, and every escape is emitted through
+# ansi.paint, which drops to plain text the moment the output is piped or the
+# terminal cannot colour. So the tables stay parseable and the numbers stay bare;
+# only the verdict, the one thing a person hunts for by eye, is lit.
 
 import "harness.tw" as bench
 import "stats.tw" as stats
 import "clock.tw" as clk
 import "baseline.tw" as base
+import "../twill_modules/twill/src/term/caps.tw" as cp
+import "../twill_modules/twill/src/term/ansi.tw" as ansi
+import "../twill_modules/twill/src/cli/theme.tw" as th
+import "../twill_modules/twill/src/cli/box.tw" as box
 
 fn pad_right(s: Str, width: I64) -> Str {
   let out = s
@@ -85,7 +93,23 @@ fn human_footer(r: bench.Result) -> Str {
     + " (for total wall time, not for comparison)"
 }
 
-fn human_comparison(c: base.Comparison) -> Str {
+# The style a verdict is lit in. The ASCII arrows survive with it: two
+# characters of emphasis for a terminal that cannot colour, the colour on top
+# for one that can, so neither reading depends on the other.
+fn verdict_style(v: I64) -> ansi.Style {
+  if v == base.VERDICT_REGRESSED {
+    return th.error()
+  }
+  if v == base.VERDICT_IMPROVED {
+    return th.success()
+  }
+  if v == base.VERDICT_INCONCLUSIVE {
+    return th.warning()
+  }
+  th.muted()
+}
+
+fn human_comparison(c: base.Comparison, caps: cp.Caps) -> Str {
   let arrow = "  "
   if c.verdict == base.VERDICT_REGRESSED {
     arrow = "!!"
@@ -96,10 +120,13 @@ fn human_comparison(c: base.Comparison) -> Str {
   if c.verdict == base.VERDICT_INCONCLUSIVE {
     arrow = "??"
   }
-  arrow + " " + pad_right(c.name, 28)
+  let st = verdict_style(c.verdict)
+  # Paint after padding: the escapes would otherwise be counted as width and
+  # throw the columns out.
+  ansi.paint(caps, st, arrow) + " " + pad_right(c.name, 28)
     + pad_left(clk.format_ns(i64(c.base_median_ns)), 12)
     + " -> " + pad_left(clk.format_ns(i64(c.new_median_ns)), 12)
-    + "  " + pad_right(base.verdict_name(c.verdict), 13)
+    + "  " + ansi.paint(caps, st, pad_right(base.verdict_name(c.verdict), 13))
     + c.reason
 }
 
@@ -219,4 +246,45 @@ fn summary_line(cs: Arr[base.Comparison]) -> Str {
   str(len(cs)) + " benchmarks, " + str(regressed) + " regressed, "
     + str(improved) + " improved, " + str(inconclusive) + " inconclusive, "
     + str(new_ones) + " new"
+}
+
+# The same tally as summary_line, framed and lit: the run's headline, the shape
+# a person's eye lands on first. Each count wears its verdict's colour, and the
+# zero counts are muted so the ones that matter carry the panel. The border is
+# the twill teal, and the box degrades to an ASCII frame where the terminal
+# cannot draw it, exactly as everywhere else the panel is used.
+fn count_line(caps: cp.Caps, n: I64, label: Str, st: ansi.Style) -> Str {
+  let style = if n == 0 { th.muted() } else { st }
+  ansi.paint(caps, style, pad_left(str(n), 4) + "  " + label)
+}
+
+fn summary_panel(cs: Arr[base.Comparison], caps: cp.Caps) -> Str {
+  let regressed = 0
+  let improved = 0
+  let inconclusive = 0
+  let new_ones = 0
+  let i = 0
+  while i < len(cs) {
+    let v = cs[i].verdict
+    if v == base.VERDICT_REGRESSED {
+      regressed = regressed + 1
+    }
+    if v == base.VERDICT_IMPROVED {
+      improved = improved + 1
+    }
+    if v == base.VERDICT_INCONCLUSIVE {
+      inconclusive = inconclusive + 1
+    }
+    if v == base.VERDICT_NEW {
+      new_ones = new_ones + 1
+    }
+    i = i + 1
+  }
+  let body: Arr[Str] = []
+  push(body, count_line(caps, regressed, "regressed", th.error()))
+  push(body, count_line(caps, improved, "improved", th.success()))
+  push(body, count_line(caps, inconclusive, "inconclusive", th.warning()))
+  push(body, count_line(caps, new_ones, "new", th.muted()))
+  let title = ansi.paint(caps, th.emphasis(), str(len(cs)) + " benchmarks")
+  box.panel(caps, body, title, th.teal(), box.rounded())
 }

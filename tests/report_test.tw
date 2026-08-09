@@ -7,6 +7,22 @@ import "../src/memory.tw" as mem
 import "../src/stats.tw" as stats
 import "../src/harness.tw" as bench
 import "../src/baseline.tw" as base
+import "../twill_modules/twill/src/term/caps.tw" as cp
+import "../twill_modules/twill/src/term/ansi.tw" as ansi
+import "../twill_modules/twill/src/cli/theme.tw" as th
+
+# A terminal that cannot colour: the plain reading of every report, and the one
+# the tests pin, so an assertion never depends on which machine ran it.
+fn plain_caps() -> cp.Caps = cp.Caps {
+  level: cp.LEVEL_PLAIN, tty: false, width: 80, height: 24,
+  hyperlinks: false, unicode: false, animate: false,
+}
+
+# A terminal that can: truecolor, so ansi.paint actually emits escapes.
+fn colour_caps() -> cp.Caps = cp.Caps {
+  level: cp.LEVEL_TRUECOLOR, tty: true, width: 80, height: 24,
+  hyperlinks: false, unicode: true, animate: false,
+}
 
 fn result_of(name: Str, samples: Arr[I64], warning: Str) -> bench.Result {
   let s = stats.summarize(samples)
@@ -139,7 +155,29 @@ fn a_regression_is_marked_so_it_can_be_found_by_eye() {
   let c = base.Comparison { name: "matmul", verdict: base.VERDICT_REGRESSED,
     base_median_ns: 100.0, new_median_ns: 200.0, relative: 1.0, sigmas: 9.0,
     alloc_delta: 0, reason: "100.0% slower" }
-  t.equal_str("regressions carry a marker", rep.human_comparison(c)[0:2], "!!")
+  t.equal_str("regressions carry a marker", rep.human_comparison(c, plain_caps())[0:2], "!!")
+}
+
+fn a_regression_is_lit_when_the_terminal_can_colour() {
+  let c = base.Comparison { name: "matmul", verdict: base.VERDICT_REGRESSED,
+    base_median_ns: 100.0, new_median_ns: 200.0, relative: 1.0, sigmas: 9.0,
+    alloc_delta: 0, reason: "100.0% slower" }
+  let lit = rep.human_comparison(c, colour_caps())
+  let bare = rep.human_comparison(c, plain_caps())
+  # The colour terminal emits an escape byte; the plain one never does, so the
+  # table stays parseable the moment it is piped.
+  t.check("a colour terminal lights the verdict", index_of(lit, chr(27)) >= 0)
+  t.check("a plain terminal leaves it bare", index_of(bare, chr(27)) < 0)
+}
+
+fn the_summary_panel_is_a_frame_that_degrades_to_ascii() {
+  let cs: Arr[base.Comparison] = [
+    base.Comparison { name: "b", verdict: base.VERDICT_REGRESSED, base_median_ns: 1.0,
+      new_median_ns: 2.0, relative: 1.0, sigmas: 9.0, alloc_delta: 0, reason: "" },
+  ]
+  let out = rep.summary_panel(cs, plain_caps())
+  t.check("the panel has ascii corners without box glyphs", index_of(out, "+") >= 0)
+  t.check("the tally is named inside it", index_of(out, "regressed") >= 0)
 }
 
 a_duration_is_shown_in_the_unit_that_reads()
@@ -155,4 +193,6 @@ a_quote_in_a_name_does_not_break_the_json()
 a_baseline_renders_sorted_with_a_fixed_field_order()
 a_summary_line_counts_every_verdict()
 a_regression_is_marked_so_it_can_be_found_by_eye()
+a_regression_is_lit_when_the_terminal_can_colour()
+the_summary_panel_is_a_frame_that_degrades_to_ascii()
 t.report("report")

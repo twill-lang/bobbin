@@ -136,20 +136,22 @@ after the check.
 
 ### 7. twill's terminal layer, reachable from a package
 
-**Needs:** `src/term/` available as `std/term`, or an equivalent
-**Used by:** `src/report.tw`, which would call it and does not
-**Status:** it exists, in the twill repository, as files.
+**Needs:** `src/term/` reachable from a package
+**Used by:** `src/report.tw`, which now calls it
+**Status:** RESOLVED. twill's terminal modules were made import-portable.
 
-twill resolves a non-`std/` import as a path relative to the importing file, so
-only `std/` modules are reachable from an installed package. `src/term/` is not
-one. bobbin therefore has no colour and no capability detection, and marks a
-regression with `!!` and an improvement with `++` because two ASCII characters
-are the only emphasis available to it.
+The premise here was wrong, and it was the twill side that fixed it. twill's
+`src/term/` and `src/cli/` modules were converted to import each other by a
+path relative to the importing file rather than to the working directory, and
+`resolveImport` tries the importer-relative path first. So a package that
+vendors twill under `twill_modules/` can reach the terminal layer with
+`import "../twill_modules/twill/src/term/caps.tw"`, exactly the way weft reaches
+`chart` and `box`. bobbin now does: `src/report.tw` detects capabilities once
+and lights each verdict in its colour, the regression red and the improvement
+mint, dropping to plain text the moment the output is piped. The `!!` and `++`
+markers stay underneath the colour so neither reading depends on the other.
 
-This matters more for bobbin than for a library that only prints results. A
-regression in a table of forty benchmarks is something a person has to find by
-eye, and colour is the tool for that. Same entry as loom's 8; it should be
-satisfied once.
+This was loom's 8 as well; both are satisfied by the one portability change.
 
 ## Not blocking, but the source is worse without them
 

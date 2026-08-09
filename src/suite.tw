@@ -14,6 +14,7 @@ mode systems
 import "harness.tw" as bench
 import "baseline.tw" as base
 import "report.tw" as rep
+import "../twill_modules/twill/src/term/caps.tw" as cp
 
 struct Case {
   name: Str,
@@ -119,9 +120,12 @@ fn print_json(results: Arr[bench.Result]) {
 
 fn print_comparisons(cs: Arr[base.Comparison], b: base.Baseline,
                      results: Arr[bench.Result]) {
+  # Detected once for the whole report: piped output comes back plain, a colour
+  # terminal gets the verdicts lit.
+  let caps = cp.detect()
   let i = 0
   while i < len(cs) {
-    print(rep.human_comparison(cs[i]))
+    print(rep.human_comparison(cs[i], caps))
     i = i + 1
   }
   let gone = base.missing(b, results)
@@ -130,7 +134,7 @@ fn print_comparisons(cs: Arr[base.Comparison], b: base.Baseline,
     print("-- " + gone[j] + " is in the baseline and was not run; a rename loses its history")
     j = j + 1
   }
-  print(rep.summary_line(cs))
+  print(rep.summary_panel(cs, caps))
 }
 
 fn gate(cs: Arr[base.Comparison]) -> Bool = base.any_regression(cs)
