@@ -29,10 +29,10 @@ import "harness.tw" as bench
 import "stats.tw" as stats
 import "clock.tw" as clk
 import "baseline.tw" as base
-import "../twill_modules/twill/src/term/caps.tw" as cp
-import "../twill_modules/twill/src/term/ansi.tw" as ansi
-import "../twill_modules/twill/src/cli/theme.tw" as th
-import "../twill_modules/twill/src/cli/box.tw" as box
+import "std/term/caps" as cp
+import "std/term/ansi" as ansi
+import "std/term/theme" as th
+import "std/term/box" as box
 
 fn pad_right(s: Str, width: I64) -> Str {
   let out = s

@@ -7,9 +7,9 @@ import "../src/memory.tw" as mem
 import "../src/stats.tw" as stats
 import "../src/harness.tw" as bench
 import "../src/baseline.tw" as base
-import "../twill_modules/twill/src/term/caps.tw" as cp
-import "../twill_modules/twill/src/term/ansi.tw" as ansi
-import "../twill_modules/twill/src/cli/theme.tw" as th
+import "std/term/caps" as cp
+import "std/term/ansi" as ansi
+import "std/term/theme" as th
 
 # A terminal that cannot colour: the plain reading of every report, and the one
 # the tests pin, so an assertion never depends on which machine ran it.

@@ -14,7 +14,7 @@ mode systems
 import "harness.tw" as bench
 import "baseline.tw" as base
 import "report.tw" as rep
-import "../twill_modules/twill/src/term/caps.tw" as cp
+import "std/term/caps" as cp
 
 struct Case {
   name: Str,
