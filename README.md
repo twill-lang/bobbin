@@ -1,11 +1,11 @@
 <p align="center">
-  <img alt="twill" src="https://raw.githubusercontent.com/martin-k-m/twill/main/assets/twill-mark.png" width="120">
+  <img alt="twill" src="https://raw.githubusercontent.com/twill-lang/twill/main/assets/twill-mark.png" width="120">
 </p>
 
 <h1 align="center">bobbin</h1>
 
 <p align="center">
-  <b>Benchmarking and profiling for <a href="https://github.com/martin-k-m/twill">twill</a>.</b><br>
+  <b>Benchmarking and profiling for <a href="https://github.com/twill-lang/twill">twill</a>.</b><br>
   Written in twill.
 </p>
 
@@ -207,7 +207,7 @@ There is no significance test, deliberately. See `docs/needs.md` entry 13.
 Once spool, `mode systems` and a clock all exist:
 
 ```
-spool add bobbin https://github.com/martin-k-m/bobbin
+spool add bobbin https://github.com/twill-lang/bobbin
 ```
 
 spool vendors into `twill_modules/`, and twill's import is a path, so the import
