@@ -3,9 +3,17 @@ mode systems
 # clock.tw: the one thing a benchmarking tool cannot fake.
 #
 # bobbin needs a monotonic clock with a resolution well below the time of the
-# thing being measured. twill has neither a clock nor a resolution guarantee, so
-# this file is a stated interface with nothing behind it, and everything else in
-# bobbin is written against the interface. See docs/needs.md entry 1.
+# thing being measured. twill 1.6 provides `mono_ns()` and `now_ns` below is now
+# that call rather than a stub; docs/needs.md entry 1 is closed for the clock's
+# existence and open for its resolution.
+#
+# The resolution is the part that is not settled, and it is measured rather than
+# assumed. `probe` below reports what this machine actually does. On Windows the
+# observed granularity is around half a millisecond: mono_ns returns nanoseconds
+# as a unit but not as a resolution, so a microsecond-scale benchmark reads as a
+# median of zero. That is not a fault in this file and it is not something this
+# file can hide -- `probe` measures it, and src/harness.tw refuses to report a
+# median at or below it. Raise `inner` until a sample lasts milliseconds.
 #
 # The requirements, written here because they are what the language has to
 # provide and not what bobbin would like:

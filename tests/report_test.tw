@@ -140,11 +140,11 @@ fn index_of(hay: Str, needle: Str) -> I64 {
 
 fn a_summary_line_counts_every_verdict() {
   let cs: Arr[base.Comparison] = [
-    base.Comparison { name: "a", verdict: base.VERDICT_PASS, base_median_ns: 1.0,
+    base.Comparison { name: "a", verdict: base.Pass, base_median_ns: 1.0,
       new_median_ns: 1.0, relative: 0.0, sigmas: 0.0, alloc_delta: 0, reason: "" },
-    base.Comparison { name: "b", verdict: base.VERDICT_REGRESSED, base_median_ns: 1.0,
+    base.Comparison { name: "b", verdict: base.Regressed, base_median_ns: 1.0,
       new_median_ns: 2.0, relative: 1.0, sigmas: 9.0, alloc_delta: 0, reason: "" },
-    base.Comparison { name: "c", verdict: base.VERDICT_NEW, base_median_ns: 0.0,
+    base.Comparison { name: "c", verdict: base.New, base_median_ns: 0.0,
       new_median_ns: 1.0, relative: 0.0, sigmas: 0.0, alloc_delta: 0, reason: "" },
   ]
   t.equal_str("the counts", rep.summary_line(cs),
@@ -152,14 +152,14 @@ fn a_summary_line_counts_every_verdict() {
 }
 
 fn a_regression_is_marked_so_it_can_be_found_by_eye() {
-  let c = base.Comparison { name: "matmul", verdict: base.VERDICT_REGRESSED,
+  let c = base.Comparison { name: "matmul", verdict: base.Regressed,
     base_median_ns: 100.0, new_median_ns: 200.0, relative: 1.0, sigmas: 9.0,
     alloc_delta: 0, reason: "100.0% slower" }
   t.equal_str("regressions carry a marker", rep.human_comparison(c, plain_caps())[0:2], "!!")
 }
 
 fn a_regression_is_lit_when_the_terminal_can_colour() {
-  let c = base.Comparison { name: "matmul", verdict: base.VERDICT_REGRESSED,
+  let c = base.Comparison { name: "matmul", verdict: base.Regressed,
     base_median_ns: 100.0, new_median_ns: 200.0, relative: 1.0, sigmas: 9.0,
     alloc_delta: 0, reason: "100.0% slower" }
   let lit = rep.human_comparison(c, colour_caps())
@@ -172,7 +172,7 @@ fn a_regression_is_lit_when_the_terminal_can_colour() {
 
 fn the_summary_panel_is_a_frame_that_degrades_to_ascii() {
   let cs: Arr[base.Comparison] = [
-    base.Comparison { name: "b", verdict: base.VERDICT_REGRESSED, base_median_ns: 1.0,
+    base.Comparison { name: "b", verdict: base.Regressed, base_median_ns: 1.0,
       new_median_ns: 2.0, relative: 1.0, sigmas: 9.0, alloc_delta: 0, reason: "" },
   ]
   let out = rep.summary_panel(cs, plain_caps())

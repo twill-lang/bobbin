@@ -57,30 +57,22 @@ fn default_thresholds() -> Thresholds {
   Thresholds { min_relative: 0.05, sigmas: 3.0, max_relative_iqr: 0.10 }
 }
 
-let VERDICT_PASS = 0
-let VERDICT_REGRESSED = 1
-let VERDICT_IMPROVED = 2
-let VERDICT_INCONCLUSIVE = 3
-let VERDICT_NEW = 4
-let VERDICT_MISSING = 5
+# The six answers a comparison can give. This was six I64 constants and an
+# if-ladder that ended in a bare "missing", so a seventh verdict would have been
+# reported as missing by every reader that had not been updated. As an enum the
+# checker names every match that has not been updated instead, which costs a
+# compile and not a wrong line in a CI log.
+enum Verdict { Pass, Regressed, Improved, Inconclusive, New, Missing }
 
-fn verdict_name(v: I64) -> Str {
-  if v == VERDICT_PASS {
-    return "pass"
+fn verdict_name(v: Verdict) -> Str {
+  match v {
+    Pass => "pass",
+    Regressed => "regressed",
+    Improved => "improved",
+    Inconclusive => "inconclusive",
+    New => "new",
+    Missing => "missing",
   }
-  if v == VERDICT_REGRESSED {
-    return "regressed"
-  }
-  if v == VERDICT_IMPROVED {
-    return "improved"
-  }
-  if v == VERDICT_INCONCLUSIVE {
-    return "inconclusive"
-  }
-  if v == VERDICT_NEW {
-    return "new"
-  }
-  "missing"
 }
 
 # One stored measurement. Medians and IQRs rather than raw samples: a baseline
@@ -158,7 +150,7 @@ fn put(b: Baseline, e: Entry) {
 
 struct Comparison {
   name: Str,
-  verdict: I64,
+  verdict: Verdict,
   base_median_ns: F64,
   new_median_ns: F64,
   # Positive means slower.
@@ -173,7 +165,7 @@ fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
   let at = find(b, r.name)
   if at < 0 {
     return Comparison {
-      name: r.name, verdict: VERDICT_NEW,
+      name: r.name, verdict: New,
       base_median_ns: 0.0, new_median_ns: r.timing.median,
       relative: 0.0, sigmas: 0.0, alloc_delta: 0,
       reason: "no baseline entry; record one with --save",
@@ -181,14 +173,14 @@ fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
   }
   let e = b.entries[at]
   let c = Comparison {
-    name: r.name, verdict: VERDICT_PASS,
+    name: r.name, verdict: Pass,
     base_median_ns: e.median_ns, new_median_ns: r.timing.median,
     relative: 0.0, sigmas: 0.0,
     alloc_delta: r.memory.allocs - e.allocs,
     reason: "",
   }
   if e.median_ns <= 0.0 or r.timing.n == 0 {
-    c.verdict = VERDICT_INCONCLUSIVE
+    c.verdict = Inconclusive
     c.reason = "the baseline or the run has no usable median"
     return c
   }
@@ -215,18 +207,18 @@ fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
     # which at this resolution means the clock is too coarse to see the work
     # rather than that the work is perfectly stable.
     c.sigmas = 0.0
-    c.verdict = VERDICT_INCONCLUSIVE
+    c.verdict = Inconclusive
     c.reason = "both runs have zero spread; the clock cannot resolve this benchmark"
     return c
   }
 
   if len(r.warning) > 0 {
-    c.verdict = VERDICT_INCONCLUSIVE
+    c.verdict = Inconclusive
     c.reason = r.warning
     return c
   }
   if stats.relative_iqr(r.timing) > th.max_relative_iqr {
-    c.verdict = VERDICT_INCONCLUSIVE
+    c.verdict = Inconclusive
     c.reason = "the run's interquartile range is "
       + clk.fixed(stats.relative_iqr(r.timing) * 100.0, 1) + "% of its median"
     return c
@@ -235,13 +227,13 @@ fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
   let big_enough = c.relative >= th.min_relative or c.relative <= -th.min_relative
   let clear_of_noise = c.sigmas >= th.sigmas
   if not big_enough or not clear_of_noise {
-    c.verdict = VERDICT_PASS
+    c.verdict = Pass
     c.reason = "within " + clk.fixed(th.min_relative * 100.0, 0) + "% and "
       + clk.fixed(th.sigmas, 0) + " sigmas of the baseline"
     return c
   }
   if c.relative > 0.0 {
-    c.verdict = VERDICT_REGRESSED
+    c.verdict = Regressed
     c.reason = clk.fixed(c.relative * 100.0, 1) + "% slower, "
       + clk.fixed(c.sigmas, 1) + " sigmas"
     return c
@@ -249,7 +241,7 @@ fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
   # Improvements are reported, not passed over. An unexplained improvement is
   # as likely to be a benchmark that stopped doing the work as an optimisation,
   # and it is the cheapest moment to notice.
-  c.verdict = VERDICT_IMPROVED
+  c.verdict = Improved
   c.reason = clk.fixed(-c.relative * 100.0, 1) + "% faster, "
     + clk.fixed(c.sigmas, 1) + " sigmas"
   c
@@ -285,7 +277,7 @@ fn missing(b: Baseline, results: Arr[bench.Result]) -> Arr[Str] {
 fn any_regression(cs: Arr[Comparison]) -> Bool {
   let i = 0
   while i < len(cs) {
-    if cs[i].verdict == VERDICT_REGRESSED {
+    if cs[i].verdict == Regressed {
       return true
     }
     i = i + 1

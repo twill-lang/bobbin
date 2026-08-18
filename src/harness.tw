@@ -204,6 +204,22 @@ fn diagnose(s: stats.Summary, info: clk.ClockInfo) -> Str {
   if s.n == 0 {
     return "no samples were collected"
   }
+  # A median of zero. Every sample was shorter than one tick of the clock, so
+  # the run measured nothing at all. It reads in a table as an infinitely fast
+  # operation with perfect stability, which is the most flattering wrong answer
+  # a benchmark can produce, so it is caught before the granularity rule below:
+  # that rule is skipped when the granularity is unknown, and a clock too coarse
+  # to resolve the work is also a clock too coarse for the probe to measure.
+  if s.median <= 0.0 {
+    return "every sample was below one tick of the clock; raise inner"
+  }
+  if info.granularity_ns < 0 {
+    # probe() saw no non-zero difference between consecutive reads, so it has no
+    # figure to compare against. Saying so is the whole point of carrying the
+    # probe: a missing granularity used to fall through this function silently.
+    return "the clock's granularity could not be measured; treat this timing"
+      + " as an upper bound on resolution, not as a measurement"
+  }
   if info.granularity_ns > 0 and s.median <= f64(info.granularity_ns) * 2.0 {
     return "median " + clk.fixed(s.median, 1)
       + "ns is within twice the clock granularity of "

@@ -29,6 +29,7 @@ import "harness.tw" as bench
 import "stats.tw" as stats
 import "clock.tw" as clk
 import "baseline.tw" as base
+import "memory.tw" as mem
 import "std/term/caps" as cp
 import "std/term/ansi" as ansi
 import "std/term/theme" as th
@@ -82,8 +83,16 @@ fn human_notes(r: bench.Result) -> Arr[Str] {
       + "x the fastest sample; the machine is interfering")
   }
   if r.memory.available {
+    # The tensor count is printed only when it was counted. Printing "0
+    # tensors/iter" for a benchmark the runtime never counted would be the
+    # single most misleading line in this table, because zero temporaries is
+    # exactly the result someone tuning tensor code is hoping to read.
+    let tensors = "tensors/iter not counted by this runtime"
+    if r.memory.tensors_counted {
+      tensors = str(r.memory.tensors) + " tensors/iter"
+    }
     push(out, "    " + str(r.memory.allocs) + " allocs/iter, "
-      + str(r.memory.tensors) + " tensors/iter")
+      + mem.format_bytes(r.memory.bytes) + "/iter, " + tensors)
   }
   out
 }
@@ -96,30 +105,34 @@ fn human_footer(r: bench.Result) -> Str {
 # The style a verdict is lit in. The ASCII arrows survive with it: two
 # characters of emphasis for a terminal that cannot colour, the colour on top
 # for one that can, so neither reading depends on the other.
-fn verdict_style(v: I64) -> ansi.Style {
-  if v == base.VERDICT_REGRESSED {
-    return th.error()
+fn verdict_style(v: base.Verdict) -> ansi.Style {
+  match v {
+    Regressed => th.error(),
+    Improved => th.success(),
+    Inconclusive => th.warning(),
+    Pass => th.muted(),
+    New => th.muted(),
+    Missing => th.muted(),
   }
-  if v == base.VERDICT_IMPROVED {
-    return th.success()
+}
+
+# The arrow and the style are two matches over the same enum rather than one
+# match returning a pair, because a case carries one payload and a struct for
+# two strings-worth of decoration costs more to read than it saves. Both are
+# exhaustive, so a new verdict is a compile error here and not a blank column.
+fn verdict_arrow(v: base.Verdict) -> Str {
+  match v {
+    Regressed => "!!",
+    Improved => "++",
+    Inconclusive => "??",
+    Pass => "  ",
+    New => "  ",
+    Missing => "  ",
   }
-  if v == base.VERDICT_INCONCLUSIVE {
-    return th.warning()
-  }
-  th.muted()
 }
 
 fn human_comparison(c: base.Comparison, caps: cp.Caps) -> Str {
-  let arrow = "  "
-  if c.verdict == base.VERDICT_REGRESSED {
-    arrow = "!!"
-  }
-  if c.verdict == base.VERDICT_IMPROVED {
-    arrow = "++"
-  }
-  if c.verdict == base.VERDICT_INCONCLUSIVE {
-    arrow = "??"
-  }
+  let arrow = verdict_arrow(c.verdict)
   let st = verdict_style(c.verdict)
   # Paint after padding: the escapes would otherwise be counted as width and
   # throw the columns out.
@@ -156,7 +169,11 @@ fn json_row(r: bench.Result) -> Str {
     + ",\"memory_available\":" + json_bool(r.memory.available)
     + ",\"allocs_per_iter\":" + str(r.memory.allocs)
     + ",\"bytes_per_iter\":" + str(r.memory.bytes)
-    + ",\"tensors_per_iter\":" + str(r.memory.tensors)
+    # null, not -1 and not 0. A reader that treats a missing measurement as a
+    # number will plot it, and JSON has a spelling for "no value" already.
+    + ",\"tensors_counted\":" + json_bool(r.memory.tensors_counted)
+    + ",\"tensors_per_iter\":" + json_i64_or_null(r.memory.tensors,
+                                                  r.memory.tensors_counted)
     + ",\"warning\":\"" + escape(r.warning) + "\"}"
 }
 
@@ -176,6 +193,13 @@ fn json_bool(b: Bool) -> Str {
     return "true"
   }
   "false"
+}
+
+fn json_i64_or_null(n: I64, present: Bool) -> Str {
+  if present {
+    return str(n)
+  }
+  "null"
 }
 
 # Quotes and backslashes only. Every string bobbin emits is a benchmark name or
@@ -221,31 +245,41 @@ fn render_baseline(b: base.Baseline) -> Str {
   out
 }
 
-fn summary_line(cs: Arr[base.Comparison]) -> Str {
-  let regressed = 0
-  let improved = 0
-  let inconclusive = 0
-  let new_ones = 0
+# The tally both summaries render. It was written out twice, once per summary,
+# with two chances to disagree about what gets counted; counting once and
+# rendering twice is the same work and one definition.
+struct Tally {
+  regressed: I64,
+  improved: I64,
+  inconclusive: I64,
+  new_ones: I64,
+}
+
+fn tally(cs: Arr[base.Comparison]) -> Tally {
+  let t = Tally { regressed: 0, improved: 0, inconclusive: 0, new_ones: 0 }
   let i = 0
   while i < len(cs) {
-    let v = cs[i].verdict
-    if v == base.VERDICT_REGRESSED {
-      regressed = regressed + 1
-    }
-    if v == base.VERDICT_IMPROVED {
-      improved = improved + 1
-    }
-    if v == base.VERDICT_INCONCLUSIVE {
-      inconclusive = inconclusive + 1
-    }
-    if v == base.VERDICT_NEW {
-      new_ones = new_ones + 1
+    # Pass and Missing are counted by neither summary: a pass is the absence of
+    # news, and a Missing verdict never reaches a Comparison, since a vanished
+    # benchmark is reported by base.missing as a name and not as a row.
+    match cs[i].verdict {
+      Regressed => t.regressed = t.regressed + 1,
+      Improved => t.improved = t.improved + 1,
+      Inconclusive => t.inconclusive = t.inconclusive + 1,
+      New => t.new_ones = t.new_ones + 1,
+      Pass => unit,
+      Missing => unit,
     }
     i = i + 1
   }
-  str(len(cs)) + " benchmarks, " + str(regressed) + " regressed, "
-    + str(improved) + " improved, " + str(inconclusive) + " inconclusive, "
-    + str(new_ones) + " new"
+  t
+}
+
+fn summary_line(cs: Arr[base.Comparison]) -> Str {
+  let t = tally(cs)
+  str(len(cs)) + " benchmarks, " + str(t.regressed) + " regressed, "
+    + str(t.improved) + " improved, " + str(t.inconclusive) + " inconclusive, "
+    + str(t.new_ones) + " new"
 }
 
 # The same tally as summary_line, framed and lit: the run's headline, the shape
@@ -259,32 +293,12 @@ fn count_line(caps: cp.Caps, n: I64, label: Str, st: ansi.Style) -> Str {
 }
 
 fn summary_panel(cs: Arr[base.Comparison], caps: cp.Caps) -> Str {
-  let regressed = 0
-  let improved = 0
-  let inconclusive = 0
-  let new_ones = 0
-  let i = 0
-  while i < len(cs) {
-    let v = cs[i].verdict
-    if v == base.VERDICT_REGRESSED {
-      regressed = regressed + 1
-    }
-    if v == base.VERDICT_IMPROVED {
-      improved = improved + 1
-    }
-    if v == base.VERDICT_INCONCLUSIVE {
-      inconclusive = inconclusive + 1
-    }
-    if v == base.VERDICT_NEW {
-      new_ones = new_ones + 1
-    }
-    i = i + 1
-  }
+  let t = tally(cs)
   let body: Arr[Str] = []
-  push(body, count_line(caps, regressed, "regressed", th.error()))
-  push(body, count_line(caps, improved, "improved", th.success()))
-  push(body, count_line(caps, inconclusive, "inconclusive", th.warning()))
-  push(body, count_line(caps, new_ones, "new", th.muted()))
+  push(body, count_line(caps, t.regressed, "regressed", th.error()))
+  push(body, count_line(caps, t.improved, "improved", th.success()))
+  push(body, count_line(caps, t.inconclusive, "inconclusive", th.warning()))
+  push(body, count_line(caps, t.new_ones, "new", th.muted()))
   let title = ansi.paint(caps, th.emphasis(), str(len(cs)) + " benchmarks")
   box.panel(caps, body, title, th.teal(), box.rounded())
 }

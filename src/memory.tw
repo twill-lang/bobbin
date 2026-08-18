@@ -2,11 +2,14 @@ mode systems
 
 # memory.tw: allocation counters, and what has to exist before they work.
 #
-# twill exposes nothing about memory: no allocation count, no bytes allocated,
-# no live heap size, no way to ask the tensor engine how many tensors it made.
-# So this file is an interface and a specification of what the runtime has to
-# provide, and `docs/needs.md` entry 2 is the request. Nothing here can produce
-# a number today.
+# twill 1.6 provides three of the four counters this file was written against:
+# mem_allocs, mem_bytes and mem_live_bytes, gated by mem_counters_available.
+# The fourth, mem_tensors, exists as a name and returns -1, which the runtime
+# documents as "not counted" rather than as a count of zero. That distinction is
+# the whole subject of the `available` flag below and is carried through here as
+# a second flag rather than collapsed: subtracting two -1 sentinels gives 0, and
+# 0 tensors per iteration in a tensor benchmark is a claim, not a gap.
+# `docs/needs.md` entry 2 stays open for the tensor counter alone.
 #
 # What bobbin needs, and why each one rather than "memory usage":
 #
@@ -23,7 +26,9 @@ mode systems
 #   tensors()     tensors constructed. twill-specific and the most useful of
 #                 the four here, because in tensor code one avoidable temporary
 #                 per element is the difference between a benchmark that fits
-#                 in cache and one that does not.
+#                 in cache and one that does not. Still the one that is not
+#                 counted; mem_tensors returns -1 and every consumer of a
+#                 MemSample checks tensors_counted before printing the field.
 #
 # All four must be cheap and must not themselves allocate, or the counter
 # measures the counter.
@@ -36,28 +41,37 @@ struct MemSample {
   allocs: I64,
   bytes: I64,
   live_bytes: I64,
+  # -1 whenever tensors_counted is false. It is a sentinel and not a count, so
+  # nothing arithmetic is done to it in that case.
   tensors: I64,
-  # False when the runtime does not provide counters, which is the case today.
-  # Every consumer checks it, and the reporters omit the memory columns
-  # entirely rather than printing zeros. A zero in a benchmark table is a
-  # measurement, and "we could not measure" is not zero.
+  # False when the runtime does not provide counters. Every consumer checks it,
+  # and the reporters omit the memory columns entirely rather than printing
+  # zeros. A zero in a benchmark table is a measurement, and "we could not
+  # measure" is not zero.
   available: Bool,
+  # The same rule one field down. The three byte-and-count fields are counted
+  # by twill 1.6 and the tensor count is not, so a sample can be available and
+  # still have nothing to say about tensors.
+  tensors_counted: Bool,
 }
 
 fn unavailable() -> MemSample {
-  MemSample { allocs: 0, bytes: 0, live_bytes: 0, tensors: 0, available: false }
+  MemSample { allocs: 0, bytes: 0, live_bytes: 0, tensors: -1,
+              available: false, tensors_counted: false }
 }
 
 fn read() -> MemSample {
   if not mem_counters_available() {
     return unavailable()
   }
+  let t = mem_tensors()
   MemSample {
     allocs: mem_allocs(),
     bytes: mem_bytes(),
     live_bytes: mem_live_bytes(),
-    tensors: mem_tensors(),
+    tensors: t,
     available: true,
+    tensors_counted: t >= 0,
   }
 }
 
@@ -67,12 +81,20 @@ fn delta(before: MemSample, after: MemSample) -> MemSample {
   if not before.available or not after.available {
     return unavailable()
   }
+  # Both ends have to have counted tensors for the difference to mean anything.
+  # -1 minus -1 is 0, which is the wrong answer and the plausible-looking one.
+  let counted = before.tensors_counted and after.tensors_counted
+  let t = -1
+  if counted {
+    t = after.tensors - before.tensors
+  }
   MemSample {
     allocs: after.allocs - before.allocs,
     bytes: after.bytes - before.bytes,
     live_bytes: after.live_bytes - before.live_bytes,
-    tensors: after.tensors - before.tensors,
+    tensors: t,
     available: true,
+    tensors_counted: counted,
   }
 }
 
@@ -83,12 +105,17 @@ fn per_iter(d: MemSample, iters: I64) -> MemSample {
   if not d.available or iters <= 0 {
     return unavailable()
   }
+  let t = -1
+  if d.tensors_counted {
+    t = d.tensors / iters
+  }
   MemSample {
     allocs: d.allocs / iters,
     bytes: d.bytes / iters,
     live_bytes: d.live_bytes / iters,
-    tensors: d.tensors / iters,
+    tensors: t,
     available: true,
+    tensors_counted: d.tensors_counted,
   }
 }
 

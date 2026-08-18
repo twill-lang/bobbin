@@ -63,7 +63,7 @@ fn a_change_larger_than_the_floor_but_lost_in_noise_is_not_a_regression() {
   let shifted: Arr[I64] = [760, 860, 960, 1080, 1190, 1300, 1400, 970, 1190, 1080]
   let c = base.compare(result_of("noisy", shifted), b, base.default_thresholds())
   t.check("a noisy shift is not called a regression",
-    c.verdict != base.VERDICT_REGRESSED)
+    c.verdict != base.Regressed)
 }
 
 fn a_large_clear_slowdown_is_a_regression() {

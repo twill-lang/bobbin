@@ -25,7 +25,13 @@ The baseline is milestone 1 of `docs/self-hosting.md` in the twill repository:
 **Needs:** `mono_ns() -> I64`
 **Used by:** `src/clock.tw` (`now_ns`, `probe`), and therefore every timing in
 the repository
-**Status:** twill has no clock of any kind.
+**Status:** landed in twill 1.6 as `mono_ns()`, and `src/clock.tw` calls it. The
+resolution requirement below is *not* met on every platform: on Windows the
+granularity measured by `clk.probe` is around half a millisecond, so `mono_ns`
+is nanoseconds as a unit and not as a resolution. `src/harness.tw` refuses to
+report a median at or below the measured granularity, and refuses one when the
+granularity could not be measured at all, so the shortfall is visible rather
+than silent. This entry stays open for the resolution alone.
 
 This is the whole tool. The requirements are in the header of `src/clock.tw` and
 are repeated here because they are requirements on the runtime and not
@@ -54,7 +60,13 @@ If only one of these entries is ever implemented, this is the one.
 **Needs:** `mem_counters_available() -> Bool`, `mem_allocs() -> I64`,
 `mem_bytes() -> I64`, `mem_live_bytes() -> I64`, `mem_tensors() -> I64`
 **Used by:** `src/memory.tw` (`read`), `src/harness.tw` (`run`)
-**Status:** twill exposes nothing about memory.
+**Status:** three of the four landed in twill 1.6. `mem_counters_available`,
+`mem_allocs`, `mem_bytes` and `mem_live_bytes` all return real figures.
+`mem_tensors` exists as a name and returns -1, which the runtime documents as
+"not counted". `src/memory.tw` carries a second flag, `tensors_counted`, for
+exactly that: subtracting two -1 sentinels gives 0, and zero tensors per
+iteration is the answer someone tuning tensor code most wants to see. This entry
+stays open for the tensor counter alone.
 
 Four counters, and each answers a different question:
 
@@ -68,13 +80,16 @@ Four counters, and each answers a different question:
 - `mem_tensors` is twill-specific and the most useful of the four here. In
   tensor code one avoidable temporary per element is the difference between a
   benchmark that fits in cache and one that does not, and no general-purpose
-  allocation count separates a tensor from a slice header.
+  allocation count separates a tensor from a slice header. This is the one still
+missing.
 
 All must be cheap and must not themselves allocate. The `available` flag exists
 because bobbin has to distinguish "zero allocations" from "cannot measure", and
 printing a zero for the second is the most misleading thing a profiler can do.
-Until they exist, `mem.read()` returns `unavailable()` and every reporter omits
-the memory columns entirely.
+Where the counters are absent, `mem.read()` returns `unavailable()` and every
+reporter omits the memory columns entirely; where only the tensor count is
+absent, the reporters print the other three and say the tensor count was not
+counted.
 
 ### 3. A compiler barrier, or a guarantee there is nothing to barrier against
 
