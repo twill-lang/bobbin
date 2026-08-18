@@ -12,29 +12,27 @@
 <p align="center">
   <img alt="bobbin" src="https://img.shields.io/badge/bobbin-v0.1.0-7FE3C4?style=flat-square&labelColor=12332C">
   <img alt="written in twill" src="https://img.shields.io/badge/written%20in-twill-D2F0E4?style=flat-square&labelColor=12332C">
-  <img alt="status" src="https://img.shields.io/badge/status-does%20not%20run-4FB79B?style=flat-square&labelColor=12332C">
+  <img alt="status" src="https://img.shields.io/badge/tests-passing-4FB79B?style=flat-square&labelColor=12332C">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-D2F0E4?style=flat-square&labelColor=12332C">
 </p>
 
 ---
 
-## Read this first
+## It runs
 
-**bobbin does not run yet.**
+`bobbin` is written in twill, in `.tw` files, using `mode systems`. That subset
+did not exist when this library was written, so for a long time none of the code
+here executed and this section said so. twill 1.6 is the release that closed it:
+the 5 test suites under `tests/` pass, and CI runs them against a released
+twill on every push rather than gating on the prose in this file.
 
-bobbin is written in twill, in `.tw` files, and it uses `mode systems`, the
-systems subset of the language described in `docs/self-hosting.md` in the twill
-repository. That subset is still landing. On top of that, bobbin needs two
-things from the runtime that do not exist at all: a monotonic nanosecond clock
-and allocation counters. Without a clock it cannot measure anything, so nothing
-below executes and every code block describes behaviour bobbin is written to
-have.
+```bash
+twill test tests
+```
 
-What is missing is written down in [`docs/needs.md`](docs/needs.md): one entry
-per feature, naming the file and the function that needs it. That list is the
-useful output of this repository today, and its first two entries are requests
-to the runtime rather than to the language, because a language that cannot
-report its own allocation count cannot be profiled from inside.
+You need twill 1.6.0-rc1 or newer. `docs/needs.md` is still worth reading -- it
+is the list of what this library asked the language for, and it now records
+which of those arrived and which are still open.
 
 ## What bobbin is
 
