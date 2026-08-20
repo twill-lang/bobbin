@@ -194,7 +194,10 @@ speedup available to this repository.
 
 **Used by:** `src/baseline.tw` (`find` returns -1), `src/suite.tw`
 (`validate` returns an empty string for success)
-**Status:** section 1.2, needs generics.
+**Status:** not blocked any more, and this line was stale for two releases.
+`Res[T, E]`, `Opt[T]` and postfix `?` landed in twill 1.6 as checked types, and
+twill 1.7 closed NEEDS-4, so user declarations may take type parameters as well.
+The sentinel returns below are bobbin's own to replace.
 
 Sentinel returns throughout. `find` returning `-1` is the usual bad one: it is a
 valid I64, nothing forces a caller to check it, and an unchecked `-1` indexes
