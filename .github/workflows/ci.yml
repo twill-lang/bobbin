@@ -98,7 +98,7 @@ jobs:
         run: |
           skip=""
           fail=0
-          for f in $(find src tests examples -name '*.tw' 2>/dev/null); do
+          for f in $(find src tests examples suites -name '*.tw' 2>/dev/null); do
             case " $skip " in *" $f "*) continue ;; esac
             if ! ./twill check "$f"; then
               fail=1

@@ -338,10 +338,12 @@ fn main() {
   suite.add(s, "eltwise_chain/f32", bench_chain_f32)
   suite.add(s, "eltwise_chain/bf16", bench_chain_bf16)
 
-  let bad = suite.validate(s)
-  if len(bad) > 0 {
-    print("bobbin: " + bad)
-    exit(1)
+  match suite.validate(s) {
+    Ok(_) => unit,
+    Err(msg) => {
+      print("bobbin: " + msg)
+      exit(1)
+    },
   }
 
   let results = suite.run_all(s)
@@ -365,4 +367,6 @@ fn main() {
   }
 }
 
-main()
+# No `main()` call here on purpose. `twill run` executes a systems-mode file's
+# top level and THEN calls `main()` itself, which it has done since twill 1.6.1,
+# so a file that also calls it runs the whole program twice.

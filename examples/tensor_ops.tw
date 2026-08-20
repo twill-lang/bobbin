@@ -80,4 +80,6 @@ fn main() {
   }
 }
 
-main()
+# No `main()` call here on purpose. `twill run` executes a systems-mode file's
+# top level and THEN calls `main()` itself, which it has done since twill 1.6.1,
+# so a file that also calls it runs the whole program twice.
