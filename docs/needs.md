@@ -192,28 +192,42 @@ speedup available to this repository.
 
 ### 10. `Res[T, E]` and `Opt[T]`
 
-**Used by:** `src/baseline.tw` (`find` returns -1), `src/suite.tw`
-(`validate` returns an empty string for success)
-**Status:** not blocked any more, and this line was stale for two releases.
-`Res[T, E]`, `Opt[T]` and postfix `?` landed in twill 1.6 as checked types, and
-twill 1.7 closed NEEDS-4, so user declarations may take type parameters as well.
-The sentinel returns below are bobbin's own to replace.
+**Used by:** `src/baseline.tw` (`find`), `src/suite.tw` (`validate`)
+**Status:** done (2026-08, on twill 1.7).
 
-Sentinel returns throughout. `find` returning `-1` is the usual bad one: it is a
-valid I64, nothing forces a caller to check it, and an unchecked `-1` indexes
-from the end of an array in many languages and would here too if `Arr` allowed
-it.
+`find` returned `-1` for an absent entry, which the paragraph below called the
+usual bad sentinel: `-1` is a valid I64, nothing forced a caller to test it, and
+both callers had to remember. It returns `Opt[I64]` now, so there is no index to
+read without saying which branch you are in. `put` keeps using the index to
+replace in place and `compare` takes the `None` arm to build its `New` verdict,
+which is why the index and not the entry is what comes back.
+
+`validate` returned an empty string for success and returns `Res[Unit, Str]`.
+
+*Previously:* "Sentinel returns throughout. `find` returning `-1` is the usual
+bad one: it is a valid I64, nothing forces a caller to check it, and an
+unchecked `-1` indexes from the end of an array in many languages and would here
+too if `Arr` allowed it."
 
 ### 11. Sum types and `match`
 
 **Would improve:** `src/baseline.tw` (`verdict_name`, `compare`),
 `src/report.tw` (`human_comparison`)
-**Status:** designed in section 1.2, not implemented.
+**Status:** done, and this status line was stale for two releases. twill shipped
+`enum` with payloads, `match` and enforced exhaustiveness in 1.6 and bobbin
+adopted it at the same time.
 
-Six verdicts as I64 constants and two if-chains over them, in different files.
-Adding a seventh verdict compiles and silently falls through to "missing" in one
-place and to the default marker in the other. Exhaustive `match` is what turns
-that into a compile error.
+`src/baseline.tw` declares
+`enum Verdict { Pass, Regressed, Improved, Inconclusive, New, Missing }`, and
+all three dispatches over it -- `verdict_name`, and `verdict_style` and
+`verdict_arrow` under `human_comparison` -- are exhaustive matches. A seventh
+verdict is now a check-time error naming the missing arm in each of them, which
+is exactly what the paragraph below asked for.
+
+*Previously, and now describing nothing:* "Six verdicts as I64 constants and two
+if-chains over them, in different files. Adding a seventh verdict compiles and
+silently falls through to \"missing\" in one place and to the default marker in
+the other."
 
 ### 12. Integer formatting with a thousands separator, and string padding
 

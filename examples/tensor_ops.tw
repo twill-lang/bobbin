@@ -51,10 +51,12 @@ fn main() {
   batched_grad.inner = bench.auto_inner(bench_grad)
   suite.add_with(s, "grad", batched_grad, bench_grad)
 
-  let bad = suite.validate(s)
-  if len(bad) > 0 {
-    print("bobbin: " + bad)
-    exit(1)
+  match suite.validate(s) {
+    Ok(_) => unit,
+    Err(msg) => {
+      print("bobbin: " + msg)
+      exit(1)
+    },
   }
 
   let results = suite.run_all(s)

@@ -118,25 +118,33 @@ fn entry_of(r: bench.Result, note: Str) -> Entry {
   }
 }
 
-fn find(b: Baseline, name: Str) -> I64 {
+# The index of the entry named `name`, if there is one.
+#
+# This returned -1 for absent, which docs/needs.md entry 10 called the usual bad
+# sentinel: -1 is a valid I64, nothing forced a caller to test it, and the two
+# callers below both had to remember. `Opt` makes the absent case a thing you
+# cannot read an index out of without saying which branch you are in.
+fn find(b: Baseline, name: Str) -> Opt[I64] {
   let i = 0
   while i < len(b.entries) {
     if b.entries[i].name == name {
-      return i
+      return Some(i)
     }
     i = i + 1
   }
-  -1
+  None
 }
 
 # Insert or replace, keeping the array sorted by name. Sorted because a
 # baseline file is committed, and a file whose line order depends on the order
 # benchmarks happened to run produces a diff on every update.
 fn put(b: Baseline, e: Entry) {
-  let at = find(b, e.name)
-  if at >= 0 {
-    b.entries[at] = e
-    return
+  match find(b, e.name) {
+    Some(at) => {
+      b.entries[at] = e
+      return
+    },
+    None => unit,
   }
   push(b.entries, e)
   let j = len(b.entries) - 1
@@ -162,16 +170,15 @@ struct Comparison {
 }
 
 fn compare(r: bench.Result, b: Baseline, th: Thresholds) -> Comparison {
-  let at = find(b, r.name)
-  if at < 0 {
-    return Comparison {
+  let e: Entry = match find(b, r.name) {
+    Some(at) => b.entries[at],
+    None => return Comparison {
       name: r.name, verdict: New,
       base_median_ns: 0.0, new_median_ns: r.timing.median,
       relative: 0.0, sigmas: 0.0, alloc_delta: 0,
       reason: "no baseline entry; record one with --save",
-    }
+    },
   }
-  let e = b.entries[at]
   let c = Comparison {
     name: r.name, verdict: Pass,
     base_median_ns: e.median_ns, new_median_ns: r.timing.median,

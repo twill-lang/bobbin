@@ -8,6 +8,17 @@ import "../src/stats.tw" as stats
 import "../src/memory.tw" as mem
 import "../src/clock.tw" as clk
 
+# The refusal message from a result that is expected to carry one, and "" from a
+# success. Both assertions below are written against it, which is what they said
+# before `validate` moved onto `Res` and is still what they mean.
+fn refusal(r: Res[Unit, Str]) -> Str {
+  match r {
+    Err(msg) => msg,
+    Ok(_) => "",
+  }
+}
+
+
 fn nothing(i: I64) -> F64 = f64(i)
 
 fn result_of(name: Str, samples: Arr[I64]) -> bench.Result {
@@ -33,14 +44,14 @@ fn two_benchmarks_with_one_name_are_refused() {
   let s = suite.suite("tensor")
   suite.add(s, "matmul", nothing)
   suite.add(s, "matmul", nothing)
-  t.check("a duplicate name is refused", len(suite.validate(s)) > 0)
+  t.check("a duplicate name is refused", len(refusal(suite.validate(s))) > 0)
 }
 
 fn distinct_names_are_accepted() {
   let s = suite.suite("tensor")
   suite.add(s, "matmul", nothing)
   suite.add(s, "conv", nothing)
-  t.equal_str("distinct names pass", suite.validate(s), "")
+  t.equal_str("distinct names pass", refusal(suite.validate(s)), "")
 }
 
 fn per_case_options_survive_registration() {

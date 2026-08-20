@@ -43,19 +43,19 @@ fn add_with(s: Suite, name: Str, opts: bench.Options, body: fn(I64) -> F64) {
 # Duplicate names are refused. Two benchmarks with one name means one of them
 # silently overwrites the other's baseline entry, and the history of a
 # benchmark quietly becomes the history of two different things.
-fn validate(s: Suite) -> Str {
+fn validate(s: Suite) -> Res[Unit, Str] {
   let i = 0
   while i < len(s.cases) {
     let j = i + 1
     while j < len(s.cases) {
       if s.cases[i].name == s.cases[j].name {
-        return "two benchmarks are named " + s.cases[i].name
+        return Err("two benchmarks are named " + s.cases[i].name)
       }
       j = j + 1
     }
     i = i + 1
   }
-  ""
+  Ok(unit)
 }
 
 fn run_all(s: Suite) -> Arr[bench.Result] {
