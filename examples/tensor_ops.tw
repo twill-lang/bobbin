@@ -7,7 +7,7 @@ mode systems
 #
 #   twill run examples/tensor_ops.tw
 #
-# It does not run. See the README.
+# It runs, on twill 1.7.1, and exits 0. The README shows the output.
 
 import "../src/suite.tw" as suite
 import "../src/harness.tw" as bench
@@ -68,8 +68,9 @@ fn main() {
   suite.print_json(results)
 
   # Compare against the stored baseline. In a real runner this is read from
-  # bobbin.baseline; there is no file reader yet, so the comparison here is
-  # against an empty baseline and every benchmark reports as new.
+  # bobbin.baseline. twill 1.7 has read_file and write_file, but nothing in
+  # bobbin parses a baseline back yet, so the comparison here is against an
+  # empty baseline and every benchmark reports as new.
   let stored = base.new_baseline()
   let cs = suite.compare_all(results, stored, base.default_thresholds())
   print("")

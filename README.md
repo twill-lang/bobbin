@@ -27,27 +27,79 @@ the 5 test suites under `tests/` pass, and CI runs them against a released
 twill on every push rather than gating on the prose in this file.
 
 ```bash
-twill test tests
+$ twill test tests
+ok    tests\baseline_test.tw
+ok    tests\harness_protocol_test.tw
+ok    tests\report_test.tw
+ok    tests\stats_test.tw
+ok    tests\suite_test.tw
+
+5 file(s): 5 passed, 0 failed
 ```
 
-You need twill 1.7.0 or newer. `docs/needs.md` is still worth reading -- it
-is the list of what this library asked the language for, and it now records
-which of those arrived and which are still open.
+The example runs too, end to end, and exits 0:
+
+```bash
+twill run examples/tensor_ops.tw
+```
+
+`spool.toml` pins `^1.7.0` and CI installs v1.7.1, which is what the output in
+this file was produced by. `docs/needs.md` is still worth reading -- it is the
+list of what this library asked the language for, and it records which of those
+arrived and which are still open.
+
+## Getting twill
+
+There is no build step: bobbin is twill source, so the only thing to install is
+the compiler. Download a release binary, replacing `<os>-<arch>` with one of
+`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`, or
+`windows-amd64.exe`:
+
+```bash
+curl -fsSL -o twill \
+  https://github.com/twill-lang/twill/releases/download/v1.7.1/twill-v1.7.1-<os>-<arch>
+chmod +x twill
+./twill --version
+```
+
+which prints:
+
+```
+Twill 1.7.1
+```
+
+Then, from the root of a clone of this repository:
+
+```bash
+twill test tests
+twill run examples/tensor_ops.tw
+```
+
+Import paths resolve relative to the working directory, so both commands have to
+be run from the project root. That is twill's rule rather than bobbin's.
 
 ## What bobbin is
 
 | Piece | State |
 | --- | --- |
-| Timing harness: warmup, batched samples, adaptive stopping | written, unrun |
-| Median and interquartile range, never mean and sigma | written, unrun |
-| Outliers counted and reported, never discarded | written, unrun |
-| Clock overhead and granularity measured, not assumed | written, unrun |
-| Regression tracking against a stored baseline, two-condition threshold | written, unrun |
-| Human table and line-delimited JSON, as separate documents | written, unrun |
-| Memory and allocation counters | **blocked.** The runtime exposes none |
-| Reading and writing the baseline file | **blocked.** No file writing |
+| Timing harness: warmup, batched samples, adaptive stopping | runs. `tests/harness_protocol_test.tw`, and `examples/tensor_ops.tw` drives it for real |
+| Median and interquartile range, never mean and sigma | runs. `tests/stats_test.tw` |
+| Outliers counted and reported, never discarded | runs. `tests/report_test.tw`, and the example prints the counts |
+| Clock overhead and granularity measured, not assumed | runs, and the measurement is the problem: see below |
+| Regression tracking against a stored baseline, two-condition threshold | runs against an in-memory baseline. `tests/baseline_test.tw`. No baseline is loaded from disk yet |
+| Human table and line-delimited JSON, as separate documents | runs. `tests/report_test.tw`, and the example prints both |
+| Memory and allocation counters | wired, and off by default. `mem_counters_available()` is true on twill 1.7.1; set `opts.measure_memory = true` and `src/report.tw` prints allocs and bytes per iteration. `mem_tensors()` still returns -1, so the tensor count is reported as not counted |
+| Reading and writing the baseline file | unblocked in twill 1.7, not wired into bobbin. `write_file` and `read_file` both exist and work; `report.render_baseline` still only returns the text, nothing writes it, and nothing parses it back |
 | Flame graphs, sampling profiles, per-line attribution | **not in v0.1** |
-| Anything running end to end | **no** |
+| Anything running end to end | yes. `twill run examples/tensor_ops.tw` exits 0 |
+
+The clock row is the one to read. `clk.probe` is called with 64 samples inside
+`src/harness.tw`, and on the Windows machine this file was checked on 64 samples
+are not enough to see a tick: `probe` reports a granularity of -1, meaning not
+measurable, and every result carries the warning that says so. Called with
+100,000 samples the same probe on the same machine reports an overhead of 254ns
+and a granularity of 378,100ns. A 378us tick is why most of the example's
+medians below are zero. See `docs/needs.md` entry 1.
 
 ## Median and IQR, not mean and sigma
 
@@ -136,19 +188,38 @@ if suite.gate(cs) { exit(1) }
 
 ## Human output
 
+`twill run examples/tensor_ops.tw`, on twill 1.7.1, on Windows, verbatim:
+
 ```
 tensor ops, 128x128
 benchmark                         median         iqr         min     n
-matmul                            4.21ms      0.09ms      4.13ms    88
-    mean 4.28ms (for total wall time, not for comparison)
-softmax                          182.40us     4.10us    178.02us   400
-    3 of 400 samples above the outlier fence; max was 2.94ms
-    mean 195.71us (for total wall time, not for comparison)
-sort                               1.94us     0.42us      1.51us  1000
-    warning: interquartile range is 21.6% of the median; this machine is
-    too noisy for a small threshold
-    mean 2.08us (for total wall time, not for comparison)
+matmul                          522.65us    373.02us         0ns  1000
+    warning: the clock's granularity could not be measured; treat this timing as an upper bound on resolution, not as a measurement
+    88 of 1000 samples above the outlier fence; max was 45.86ms
+    mean 836.12us (for total wall time, not for comparison)
+matvec                               0ns         0ns         0ns  1000
+    warning: every sample was below one tick of the clock; raise inner
+    101 of 1000 samples above the outlier fence; max was 1.38ms
+    mean 58.21us (for total wall time, not for comparison)
+softmax                              0ns    516.75us         0ns  1000
+    warning: every sample was below one tick of the clock; raise inner
+    10 of 1000 samples above the outlier fence; max was 9.22ms
+    mean 246.80us (for total wall time, not for comparison)
+sort                                 0ns         0ns         0ns  1000
+    warning: every sample was below one tick of the clock; raise inner
+    25 of 1000 samples above the outlier fence; max was 40.51ms
+    mean 54.61us (for total wall time, not for comparison)
+grad                              6.02us      4.12us         0ns   501
+    warning: the clock's granularity could not be measured; treat this timing as an upper bound on resolution, not as a measurement
+    45 of 501 samples above the outlier fence; max was 110.76us
+    mean 7.80us (for total wall time, not for comparison)
 ```
+
+Four of the five medians are zero and every row carries a warning, which is the
+table working. `mono_ns` on this machine ticks about every 378us, `auto_inner`
+sizes a batch for a millisecond that the clock cannot see, and the harness says
+so on every row rather than printing the zeros bare. A table of numbers from
+this run is not a measurement of matvec. Do not publish one.
 
 ## Machine output
 
@@ -158,13 +229,25 @@ of which parses, and appending a run is appending lines. It is a separate
 document from the human table, not the same table with the punctuation removed:
 a format that is sometimes parseable is a format nothing parses.
 
+The first line of the same run as the table above:
+
 ```json
-{"name":"matmul","unit":"ns","median":4210344,"q1":4174000,"q3":4264000,"iqr":90000,"min":4131002,"max":5012773,"mean":4283910,"robust_sigma":66716,"samples":88,"outliers":2,"iters":88,"inner":1,"warmup":3,"clock_granularity_ns":41,"clock_overhead_ns":18,"memory_available":false,"allocs_per_iter":0,"bytes_per_iter":0,"tensors_per_iter":0,"warning":""}
+{"name":"matmul","unit":"ns","median":522650,"q1":508200,"q3":881225,"iqr":373025,"min":0,"max":45862500,"mean":836124.9,"robust_sigma":276519.644181,"samples":1000,"outliers":88,"iters":1000,"inner":1,"warmup":3,"clock_granularity_ns":-1,"clock_overhead_ns":0,"memory_available":false,"allocs_per_iter":0,"bytes_per_iter":0,"tensors_counted":false,"tensors_per_iter":null,"warning":"the clock's granularity could not be measured; treat this timing as an upper bound on resolution, not as a measurement"}
 ```
 
-`memory_available` is `false` today and every memory field is omitted from the
-human table when it is. A zero in a benchmark table is a measurement, and "we
-could not measure" is not zero.
+`memory_available` is `false` there because `measure_memory` is off by default,
+not because the runtime has nothing to say. twill 1.7.1 has the counters and
+bobbin calls them; turn the option on and the same field reads `true`, with real
+figures beside it:
+
+```json
+{"name":"eltwise","unit":"ns","median":0,"q1":0,"q3":8064,"iqr":8064,"min":0,"max":22792,"mean":3431.586433,"robust_sigma":5977.761305,"samples":457,"outliers":2,"iters":29248,"inner":64,"warmup":1,"clock_granularity_ns":-1,"clock_overhead_ns":0,"memory_available":true,"allocs_per_iter":18,"bytes_per_iter":3331,"tensors_counted":false,"tensors_per_iter":null,"warning":"every sample was below one tick of the clock; raise inner"}
+```
+
+Whichever way it reads, every memory field is omitted from the human table when
+`memory_available` is false, and `tensors_per_iter` is `null` rather than `0`
+while `mem_tensors()` returns its -1. A zero in a benchmark table is a
+measurement, and "we could not measure" is not zero.
 
 ## Regression tracking that does not cry wolf
 
@@ -200,9 +283,7 @@ of the thing renamed.
 
 There is no significance test, deliberately. See `docs/needs.md` entry 13.
 
-## Install
-
-Once spool, `mode systems` and a clock all exist:
+## Using bobbin from another package
 
 ```
 spool add bobbin https://github.com/twill-lang/bobbin
@@ -211,6 +292,9 @@ spool add bobbin https://github.com/twill-lang/bobbin
 spool vendors into `twill_modules/`, and twill's import is a path, so the import
 lines are the long ones above and they resolve relative to the project root.
 That is twill's rule rather than bobbin's; see spool's README.
+
+To work on bobbin itself, clone it and see "Getting twill" above. There is
+nothing else to install: no build, no third-party packages, no Go.
 
 ## Repository layout
 
