@@ -31,25 +31,17 @@ mode systems
 # batch job is a function of the mean and not of the median. It is a different
 # question and it is labelled as one.
 
-# An insertion sort over I64 samples. Sample counts are in the hundreds and the
-# comparison is fixed, so this is small and obvious rather than fast; see
-# docs/needs.md entry 5 for the generic sort that would replace it.
-fn sorted(xs: Arr[I64]) -> Arr[I64] {
-  let out: Arr[I64] = []
-  let i = 0
-  while i < len(xs) {
-    push(out, xs[i])
-    let j = len(out) - 1
-    while j > 0 and out[j - 1] > out[j] {
-      let tmp = out[j - 1]
-      out[j - 1] = out[j]
-      out[j] = tmp
-      j = j - 1
-    }
-    i = i + 1
-  }
-  out
-}
+# The builtin sort, kept behind bobbin's own name so every caller reads the same.
+#
+# This was an insertion sort until twill 1.9.0, and docs/needs.md entry 5 was the
+# request that replaced it: the builtin refused a list whose elements were not
+# strings, so a sample of I64 timings could not use it. The comment here used to
+# say sample counts are in the hundreds, which was the excuse for a quadratic
+# sort; the default sample count is 1,000 and every summary sorts one.
+#
+# Measured on the machine that wrote this, a thousand I64 samples: 139,046 us
+# through the insertion sort and 271 us through the builtin. Same answer.
+fn sorted(xs: Arr[I64]) -> Arr[I64] = sort(xs)
 
 # A quantile of an already sorted sample, by linear interpolation between the
 # two neighbouring order statistics. Interpolating rather than picking the

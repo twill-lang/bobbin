@@ -211,11 +211,21 @@ question from having a runner, and this entry asked for the runner.
 ### 9. A generic sort, or a comparison-function parameter
 
 **Would improve:** `src/stats.tw` (`sorted`), `src/baseline.tw` (`put`)
-**Status:** open. twill 1.7.1 has a builtin `sort`, but on a list it requires
-every element to be a string: `sort([3, 1, 2])` on an `Arr[I64]` fails with
-"sort on a list expects every element to be a string". Neither of bobbin's two
-insertion sorts can use it. Function parameters landed (entry 5), so a
-comparison-function form is now expressible; nothing exposes one.
+**Status: delivered in twill 1.9.0, and taken up in one of the two places.**
+`sort` orders numbers as well as strings now and takes a comparison, so
+`stats.sorted` is one line: `fn sorted(xs: Arr[I64]) -> Arr[I64] = sort(xs)`.
+
+The claim below was that this is the single largest speedup available to this
+repository. Measured on a thousand I64 samples, which is the default sample
+count and what every summary sorts: **139,046 us through the insertion sort and
+271 us through the builtin**, same answer. So the claim was right, and the
+comment that excused the quadratic sort was wrong about the size of the input:
+it said "sample counts are in the hundreds".
+
+`baseline.put` is deliberately **not** converted. It inserts one entry into an
+array that is already sorted, which is a linear insertion; calling a general
+sort there would replace an O(n) insert with an O(n log n) sort on every write.
+The entry named two sites and only one of them was a sort in the first place.
 
 Two more insertion sorts, on top of spool's four and loom's one. Seven. The one
 in `src/stats.tw` is also the hot path of the whole tool: every summary sorts its
