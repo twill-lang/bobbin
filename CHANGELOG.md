@@ -2,6 +2,19 @@
 
 ## v0.1.0 (unreleased)
 
+### Changed
+
+- **The assertions are `std/test`, and the pin is twill 1.12.0.** twill 1.11
+  ships the assertions the test runner already assumed, and `docs/needs.md`
+  entry 8 said deleting bobbin's hand-rolled copy was a separate question from
+  having the runner. It is answered: `tests/harness.tw` is deleted outright,
+  since nothing in it was bobbin's own, and every suite imports `std/test` as
+  `t` with the same five names it called before. `report` returns the status
+  instead of calling `exit`, and prints its summary in the shape `twill test`
+  reads, so the runner shows the counts beside each file: 115 assertions
+  across five suites, where before it showed none. `spool.toml`, CI and the
+  README's install line move to 1.12.0.
+
 First cut of bobbin, the benchmarking and profiling tool for twill, written in
 twill.
 

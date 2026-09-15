@@ -28,11 +28,11 @@ twill on every push rather than gating on the prose in this file.
 
 ```bash
 $ twill test tests
-ok    tests\baseline_test.tw
-ok    tests\harness_protocol_test.tw
-ok    tests\report_test.tw
-ok    tests\stats_test.tw
-ok    tests\suite_test.tw
+ok    tests/baseline_test.tw  (26 passed, 0 failed)
+ok    tests/harness_protocol_test.tw  (18 passed, 0 failed)
+ok    tests/report_test.tw  (32 passed, 0 failed)
+ok    tests/stats_test.tw  (28 passed, 0 failed)
+ok    tests/suite_test.tw  (11 passed, 0 failed)
 
 5 file(s): 5 passed, 0 failed
 ```
@@ -43,8 +43,11 @@ The example runs too, end to end, and exits 0:
 twill run examples/tensor_ops.tw
 ```
 
-`spool.toml` pins `^1.7.0` and CI installs v1.7.1, which is what the output in
-this file was produced by. `docs/needs.md` is still worth reading -- it is the
+`spool.toml` pins `^1.12.0` and CI installs v1.12.0, which is what the test
+output above was produced by; the counts beside each file are there because
+the suites report through twill 1.11's `std/test`, whose summary line the
+runner reads. The measurements further down are older and say which release
+they were taken on. `docs/needs.md` is still worth reading -- it is the
 list of what this library asked the language for, and it records which of those
 arrived and which are still open.
 
@@ -57,7 +60,7 @@ the compiler. Download a release binary, replacing `<os>-<arch>` with one of
 
 ```bash
 curl -fsSL -o twill \
-  https://github.com/twill-lang/twill/releases/download/v1.7.1/twill-v1.7.1-<os>-<arch>
+  https://github.com/twill-lang/twill/releases/download/v1.12.0/twill-v1.12.0-<os>-<arch>
 chmod +x twill
 ./twill --version
 ```
@@ -65,7 +68,7 @@ chmod +x twill
 which prints:
 
 ```
-Twill 1.7.1
+Twill 1.12.0
 ```
 
 Then, from the root of a clone of this repository:

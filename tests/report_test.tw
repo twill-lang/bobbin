@@ -1,6 +1,6 @@
 mode systems
 
-import "harness.tw" as t
+import "std/test" as t
 import "../src/report.tw" as rep
 import "../src/clock.tw" as clk
 import "../src/memory.tw" as mem
