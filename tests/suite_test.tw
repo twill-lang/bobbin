@@ -1,6 +1,6 @@
 mode systems
 
-import "harness.tw" as t
+import "std/test" as t
 import "../src/suite.tw" as suite
 import "../src/baseline.tw" as base
 import "../src/harness.tw" as bench

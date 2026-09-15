@@ -4,7 +4,7 @@ mode systems
 # real timing would be a test whose result depended on what else the machine was
 # doing, which is the one thing a benchmarking tool's tests must not be.
 
-import "harness.tw" as t
+import "std/test" as t
 import "../src/harness.tw" as bench
 import "../src/stats.tw" as stats
 import "../src/clock.tw" as clk

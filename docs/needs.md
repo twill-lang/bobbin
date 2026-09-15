@@ -202,11 +202,23 @@ This was loom's 8 as well; both are satisfied by the one portability change.
 runs each and reports once: "5 file(s): 5 passed, 0 failed". CI runs exactly
 that command.
 
-`tests/harness.tw` is still a hand-rolled counter and is still the third
-byte-identical copy of that file in the ecosystem, after spool's and loom's.
-`twill test` reports per file, so the per-assertion names those three files
-provide are not yet something the runner supplies. Deleting them is a separate
-question from having a runner, and this entry asked for the runner.
+The separate question is answered too. twill 1.11 ships `std/test`, the
+assertions every copy of `tests/harness.tw` in the ecosystem wrote by hand,
+and bobbin's copy is deleted outright: nothing in it was bobbin's own. Every
+suite imports `std/test` as `t` and calls the same `check`, `equal_str`,
+`equal_i64`, `near` and `report`. What changed is the summary line. The copy
+printed `stats: 28 passed, 0 failed`, which the runner could not read, so
+`twill test` showed each file with no counts; `std/test` prints `stats passed
+28 failed 0` and `OK`, and the runner now shows `(28 passed, 0 failed)` beside
+it, 115 assertions across the five. The `exit(1)` is gone with it; `report`
+returns the status.
+
+*What the entry said before:* `tests/harness.tw` is still a hand-rolled
+counter and is still the third byte-identical copy of that file in the
+ecosystem, after spool's and loom's. `twill test` reports per file, so the
+per-assertion names those three files provide are not yet something the
+runner supplies. Deleting them is a separate question from having a runner,
+and this entry asked for the runner.
 
 ### 9. A generic sort, or a comparison-function parameter
 

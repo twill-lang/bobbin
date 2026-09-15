@@ -1,6 +1,6 @@
 mode systems
 
-import "harness.tw" as t
+import "std/test" as t
 import "../src/stats.tw" as stats
 
 fn sorting_orders_a_sample_without_losing_one() {
