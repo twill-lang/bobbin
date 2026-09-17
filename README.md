@@ -43,7 +43,7 @@ The example runs too, end to end, and exits 0:
 twill run examples/tensor_ops.tw
 ```
 
-`spool.toml` pins `^1.12.0` and CI installs v1.12.0, which is what the test
+`spool.toml` pins `^1.13.0` and CI installs v1.13.0, which is what the test
 output above was produced by; the counts beside each file are there because
 the suites report through twill 1.11's `std/test`, whose summary line the
 runner reads. The measurements further down are older and say which release
@@ -60,7 +60,7 @@ the compiler. Download a release binary, replacing `<os>-<arch>` with one of
 
 ```bash
 curl -fsSL -o twill \
-  https://github.com/twill-lang/twill/releases/download/v1.12.0/twill-v1.12.0-<os>-<arch>
+  https://github.com/twill-lang/twill/releases/download/v1.13.0/twill-v1.13.0-<os>-<arch>
 chmod +x twill
 ./twill --version
 ```
@@ -68,7 +68,7 @@ chmod +x twill
 which prints:
 
 ```
-Twill 1.12.0
+Twill 1.13.0
 ```
 
 Then, from the root of a clone of this repository:
