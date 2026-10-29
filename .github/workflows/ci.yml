@@ -15,7 +15,7 @@ jobs:
   source-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Every source file is twill
         run: |
@@ -79,7 +79,7 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The twill binary comes from a release rather than being built here.
       # bobbin is written in twill and has no build of its own, so the only
@@ -87,10 +87,10 @@ jobs:
       # would have. Pinned rather than floating: a green run should mean this
       # code passed against a known compiler, not against whatever was newest
       # that morning.
-      - name: Install twill v1.13.0
+      - name: Install twill v1.19.0
         run: |
           curl -fsSL -o twill \
-            https://github.com/twill-lang/twill/releases/download/v1.13.0/twill-v1.13.0-linux-amd64
+            https://github.com/twill-lang/twill/releases/download/v1.19.0/twill-v1.19.0-linux-amd64
           chmod +x twill
           ./twill --version
 
