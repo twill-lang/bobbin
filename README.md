@@ -43,7 +43,8 @@ The example runs too, end to end, and exits 0:
 twill run examples/tensor_ops.tw
 ```
 
-`spool.toml` pins `^1.19.0` and CI installs v1.19.0, which is what the test
+You need twill 1.11.0 or newer. `spool.toml` pins `^1.19.0` and CI installs
+v1.19.0, which is what the test
 output above was produced by; the counts beside each file are there because
 the suites report through twill 1.11's `std/test`, whose summary line the
 runner reads. The measurements further down are older and say which release
