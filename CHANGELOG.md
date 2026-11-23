@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **Take twill 1.19.1.** twill 1.19.1 is released, so the pin follows it.
+  `spool.toml`, CI and the README install line move from 1.19.0 to 1.19.1. This
+  is a currency bump: no source or test changed, and the five suites pass
+  unchanged on 1.19.1. 1.19.1 fixes `tensor()` on an `Arr[I64]` filled from
+  typed variables (twill-lang/twill#73).
 - **The pin is twill 1.13.0.** `spool.toml`, the CI workflow and the README's
   install line move from 1.12.0 to 1.13.0. This is a pin-currency bump, not a
   behaviour change: the five suites pass on 1.13.0 with the same 115 assertions.
